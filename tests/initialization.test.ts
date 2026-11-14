@@ -115,6 +115,8 @@ describe("completion initialization cleanup", () => {
   });
 
   it("retries workspace removal while the SDK store still holds state", async () => {
+    const previousDataDir = process.env.CURSOR_DATA_DIR;
+    process.env.CURSOR_DATA_DIR = "/virtual/cursor-data";
     const busy = Object.assign(
       new Error(
         "ENOTEMPTY: directory not empty, rmdir '/virtual/private-workspace/state'",
@@ -125,17 +127,44 @@ describe("completion initialization cleanup", () => {
     const parameters: Record<string, unknown> = { type: "object" };
     parameters.circular = parameters;
     const createAgent = vi.fn<() => Promise<BridgeAgent>>();
-    const pending = runCompletion(
-      {
-        ...request,
-        tools: [{ name: "read", description: "read", parameters }],
-      },
-      { createAgent },
-    );
-    // Retries wait on the setTimeout captured at import, not the fake clock.
-    await expect(pending).rejects.toThrow(/circular/i);
-    expect(fs.rm).toHaveBeenCalledTimes(2);
-    expect(createAgent).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+    try {
+      const pending = runCompletion(
+        {
+          ...request,
+          tools: [{ name: "read", description: "read", parameters }],
+        },
+        { createAgent },
+      );
+      // Retries wait on the setTimeout captured at import, not the fake clock.
+      // The busy workspace is removed on the second try. The SDK transcript
+      // directory is removed once after that.
+      await expect(pending).rejects.toThrow(/circular/i);
+      const removal = {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 20,
+      };
+      expect(fs.rm).toHaveBeenNthCalledWith(
+        1,
+        "/virtual/private-workspace",
+        removal,
+      );
+      expect(fs.rm).toHaveBeenNthCalledWith(
+        2,
+        "/virtual/private-workspace",
+        removal,
+      );
+      expect(fs.rm).toHaveBeenNthCalledWith(
+        3,
+        "/virtual/cursor-data/projects/virtual-private-workspace",
+        removal,
+      );
+      expect(createAgent).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (previousDataDir === undefined) delete process.env.CURSOR_DATA_DIR;
+      else process.env.CURSOR_DATA_DIR = previousDataDir;
+    }
   });
 });

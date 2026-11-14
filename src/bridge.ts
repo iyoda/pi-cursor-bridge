@@ -1,5 +1,6 @@
+import { accessSync, constants, statSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlLocalAgentStore } from "@cursor/sdk";
 import {
@@ -59,6 +60,38 @@ export interface CompletionResult {
   text?: string;
   usage?: TokenUsage;
 }
+/** Same chars/4 split Pi uses when a message has no reported usage. */
+const ESTIMATED_CHARS_PER_TOKEN = 4;
+
+/**
+ * Cancelled tool-capture runs never record SDK usage. Estimate the context
+ * that will actually be sent next time: the prompt, the assistant text, and
+ * tool-argument JSON. Thinking is not sent again, so it is not counted.
+ * Pi treats a non-zero total as the context size and does not re-estimate
+ * earlier messages, including their thinking text.
+ */
+function estimateCaptureUsage(
+  prompt: string,
+  text: string,
+  calls: readonly CapturedCall[],
+): TokenUsage {
+  const argumentChars = calls.reduce(
+    (total, call) => total + JSON.stringify(call.arguments).length,
+    0,
+  );
+  const inputTokens = Math.ceil(prompt.length / ESTIMATED_CHARS_PER_TOKEN);
+  const outputTokens = Math.ceil(
+    (text.length + argumentChars) / ESTIMATED_CHARS_PER_TOKEN,
+  );
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
 export async function runCompletion(
   request: CompletionRequest,
   deps: CompletionDependencies,
@@ -87,6 +120,11 @@ export async function runCompletion(
   let preamble = "";
   let pendingDeltas = 0;
   let drainScheduled = false;
+  let completed: CompletionResult | undefined;
+  let failure: unknown;
+  let cleanupFailure: unknown;
+  let cancelFailed = false;
+  let raced: { status?: string; error?: unknown } | undefined;
   let captured!: () => void;
   const handoff = new Promise<undefined>((resolve) => {
     captured = () => resolve(undefined);
@@ -94,7 +132,7 @@ export async function runCompletion(
   try {
     workspace = await acquire(
       mkdtemp(join(tmpdir(), "pi-cursor-sdk-")),
-      (lateWorkspace) => deleteWorkspace(lateWorkspace),
+      (lateWorkspace) => removePrivateWorkspace(lateWorkspace),
     );
     signal.throwIfAborted();
     const customTools: Record<string, SDKCustomTool> = Object.fromEntries(
@@ -175,18 +213,21 @@ export async function runCompletion(
       Promise.race([run.wait(), handoff]),
       signal,
     );
+    if (result && typeof result === "object") raced = result;
     signal.throwIfAborted();
     if (calls.length) {
       await untilAborted(handoff, signal);
       signal.throwIfAborted();
     } else {
       finished = true;
-      if (result?.status !== "finished")
+      if (!result || result.status !== "finished")
         throw new Error(
           formatFailure(result?.error, "Cursor run did not finish."),
         );
-      return { calls: [], text: result.result, usage: result.usage };
+      completed = { calls: [], text: result.result, usage: result.usage };
     }
+  } catch (error) {
+    failure = error;
   } finally {
     deadline.clear();
     accepting = false;
@@ -195,16 +236,39 @@ export async function runCompletion(
     } catch {
       // The caller's idle release must not skip workspace cleanup.
     }
-    if (!cleanupDeferred || agent) await cleanup(agent, run, !cleanupDeferred);
+    try {
+      if (!cleanupDeferred || agent)
+        await cleanup(agent, run, !cleanupDeferred);
+    } catch (error) {
+      // A finished answer and a confirmed cancel outrank post-run cleanup.
+      cleanupFailure = error;
+    }
   }
-  if (!run || run.status !== "cancelled") {
-    throw new Error(`not confirmed cancelled (status: ${run?.status})`);
+  if (failure) throw failure;
+  if (completed) return completed;
+  if (cancelFailed) throw cleanupFailure ?? new Error("SDK cleanup failed");
+  if (run?.status === "cancelled") {
+    return {
+      calls: [...calls],
+      ...(preamble ? { text: preamble } : {}),
+      usage: estimateCaptureUsage(request.prompt, preamble, calls),
+    };
   }
-  return {
-    calls: [...calls],
-    ...(preamble ? { text: preamble } : {}),
-    usage: run.usage,
-  };
+  if (cleanupFailure) throw cleanupFailure;
+  throw unconfirmedCancel(run, raced);
+
+  function unconfirmedCancel(
+    active: BridgeRun | undefined,
+    observed: { status?: string; error?: unknown } | undefined,
+  ): Error {
+    const message = `not confirmed cancelled (status: ${active?.status})`;
+    if (!observed?.status || observed.status === "cancelled")
+      return new Error(message);
+    const reason = observed.error
+      ? formatFailure(observed.error)
+      : `run reported ${observed.status}`;
+    return new Error(`${message}: ${reason}`);
+  }
 
   function observeSummaries(active: BridgeRun): void {
     // onDelta does not receive summary updates. The run stream keeps the
@@ -228,17 +292,21 @@ export async function runCompletion(
   }
 
   async function textBeforeTools(): Promise<void> {
-    // Tool execution and text delivery run concurrently. Yield once so a
-    // preamble delta already queued beside execute() can enter onDelta,
-    // then wait for that delivery. Later text belongs to the cancelled run.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    while (pendingDeltas > 0) {
+    // Text already accepted by the SDK can sit a few turns behind execute().
+    // One setImmediate drops that queued preamble. Wait out a short, fixed
+    // number of turns, including a delivery already inside onDelta. Later
+    // text belongs to the cancelled run and must not stall handoff.
+    const started = Date.now();
+    for (let turn = 0; turn < 8 && Date.now() - started < 1_000; turn += 1) {
       await new Promise<void>((resolve) => {
-        deltaWaiters.push(resolve);
-        if (pendingDeltas === 0) resolve();
+        setImmediate(resolve);
       });
+      while (pendingDeltas > 0 && Date.now() - started < 1_000) {
+        await new Promise<void>((resolve) => {
+          deltaWaiters.push(resolve);
+          if (pendingDeltas === 0) resolve();
+        });
+      }
     }
     captured();
   }
@@ -274,6 +342,7 @@ export async function runCompletion(
         for (const release of releases) release();
         await bounded(cancellation, cleanupMs);
       } catch (error) {
+        cancelFailed = true;
         errors.push(error);
       }
     }
@@ -289,12 +358,24 @@ export async function runCompletion(
         errors.push(error);
       }
     }
-    if (errors.length)
+    // A failed cancel may still be using the workspace. Disposal timing out
+    // after a finished or cancelled run still removes it.
+    if (!cancelFailed && removeWorkspace && workspace) {
+      try {
+        await removePrivateWorkspace(workspace);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length) {
+      const retained = cancelFailed
+        ? ` (workspace retained at ${workspace})`
+        : "";
       throw new AggregateError(
         errors,
-        `SDK cleanup failed (workspace retained at ${workspace}): ${errors.map(String).join("; ")}`,
+        `SDK cleanup failed${retained}: ${errors.map(String).join("; ")}`,
       );
-    if (removeWorkspace && workspace) await deleteWorkspace(workspace);
+    }
   }
 }
 
@@ -313,6 +394,49 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     realSetTimeout(resolve, ms);
   });
+}
+
+/** Directory where the SDK writes the transcript for this temporary workspace. */
+export function cursorProjectDir(workspace: string): string | undefined {
+  const slug = workspace
+    .replace(/[^a-zA-Z0-9]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug) return undefined;
+  const override = process.env.CURSOR_DATA_DIR?.trim();
+  if (override) return join(override, "projects", slug);
+  try {
+    const home = homedir();
+    if (!home.trim() || !statSync(home).isDirectory()) return undefined;
+    accessSync(home, constants.W_OK);
+    return join(home, ".cursor", "projects", slug);
+  } catch {
+    return undefined;
+  }
+}
+
+async function removePrivateWorkspace(workspace: string): Promise<void> {
+  const errors: unknown[] = [];
+  try {
+    await deleteWorkspace(workspace);
+  } catch (error) {
+    errors.push(error);
+  }
+  const transcript = cursorProjectDir(workspace);
+  if (transcript && transcript !== workspace) {
+    try {
+      await deleteWorkspace(transcript);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(
+      errors,
+      `SDK workspace removal failed: ${errors.map(String).join("; ")}`,
+    );
+  }
 }
 
 async function deleteWorkspace(path: string): Promise<void> {

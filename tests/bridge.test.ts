@@ -472,13 +472,13 @@ describe("official SDK completion", () => {
     },
   );
 
-  it("bounds disposal failures and never returns successful text", async () => {
+  it("returns a finished answer when disposal times out and still removes the workspace", async () => {
     const h = harness();
     h.dispose.mockImplementation(() => new Promise(() => {}));
     await expect(
       runCompletion({ ...request, cleanupTimeoutMs: 20 }, h),
-    ).rejects.toThrow(/cleanup timed out/i);
-    await expect(access(h.options.local!.cwd!)).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ calls: [], text: "hello", usage });
+    await expect(access(h.options.local!.cwd!)).rejects.toThrow();
   });
   it("captures tools without executing them and cancels before returning to Pi", async () => {
     const h = harness();
@@ -586,6 +586,57 @@ describe("official SDK completion", () => {
       text: "Read the file.",
       calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
     });
+    expect(h.run.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("estimates cancelled tool-capture usage without counting thinking", async () => {
+    const h = harness();
+    const prompt = "x".repeat(10);
+    const visible = "abcd";
+    const args = { path: "ab" };
+    h.send.mockImplementation(async (_message, opts) => {
+      await opts?.onDelta?.({
+        update: { type: "thinking-delta", text: "z".repeat(400) },
+      });
+      await opts?.onDelta?.({
+        update: { type: "text-delta", text: visible },
+      });
+      void Promise.resolve(
+        h.options.local!.customTools!.pi_tool_0!.execute(args, {
+          toolCallId: "sdk-call",
+        }),
+      ).catch(() => {});
+      return h.run;
+    });
+    vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+    const result = await runCompletion(
+      {
+        ...request,
+        prompt,
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object" },
+          },
+        ],
+      },
+      h,
+    );
+    // 10 prompt chars -> 3. Text 4 + {"path":"ab"} 13 = 17 chars -> 5.
+    // The 400-character thinking delta is not part of the next prompt.
+    expect(result).toMatchObject({
+      text: visible,
+      calls: [{ id: "sdk-call", name: "read", arguments: args }],
+      usage: {
+        inputTokens: 3,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 8,
+      },
+    });
+    expect(result.usage).not.toBe(usage);
     expect(h.run.cancel).toHaveBeenCalledOnce();
   });
 

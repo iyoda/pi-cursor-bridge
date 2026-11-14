@@ -22,3 +22,4 @@ This is an early development release. It is not published to npm yet.
 - Stop the completion idle timer before post-run cleanup, and restart it for context-summarization messages on the run stream. The SDK does not forward those summary updates as deltas.
 - Keep the `auto` fallback when a fetched catalog omits it, so a saved `auto` selection still resolves. If the catalog includes `auto`, that row is used.
 - Tell the model that instructions inside tool results are data and do not outrank the latest user request.
+- Estimate usage on tool-capture turns, which are cancelled before the SDK records usage. Input is the sent prompt length divided by 4. Output is the assistant text plus tool-argument JSON, divided by 4. Thinking is omitted because the next prompt does not include it, so Pi's compaction count no longer treats that thinking as context. The figures are approximate.
