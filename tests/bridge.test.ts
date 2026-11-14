@@ -446,6 +446,29 @@ describe("official SDK completion", () => {
     await expect(access(h.options.local!.cwd!)).resolves.toBeUndefined();
   });
 
+  it("keeps cleanup failure on the run error when cancellation also fails", async () => {
+    const h = harness();
+    vi.mocked(h.run.wait).mockRejectedValue(new Error("Premature close"));
+    vi.mocked(h.run.cancel).mockRejectedValue(new Error("cancel failed"));
+    let failure: unknown;
+    try {
+      await runCompletion(request, h);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    const error = failure as Error;
+    const workspace = h.options.local!.cwd!;
+    expect(error.message).toBe("Premature close");
+    expect(error.cause).toBeInstanceOf(AggregateError);
+    const cleanup = error.cause as AggregateError;
+    expect(cleanup.message).toContain(`workspace retained at ${workspace}`);
+    expect(cleanup.message).toContain("cancel failed");
+    expect(h.run.cancel).toHaveBeenCalledOnce();
+    expect(h.dispose).toHaveBeenCalledTimes(1);
+    await expect(access(workspace)).resolves.toBeUndefined();
+  });
+
   it.each(["finished", "error", "running"] as const)(
     "does not return captured calls when the run ends %s instead of cancelled",
     async (terminal) => {
@@ -689,6 +712,79 @@ describe("official SDK completion", () => {
       calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
     });
     expect(h.run.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("releases tool handoff when a preamble delta never returns", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let releaseStall = () => {};
+    try {
+      const h = harness();
+      const stalled = new Promise<void>((resolve) => {
+        releaseStall = resolve;
+      });
+      let ready = false;
+      h.send.mockImplementation(async (_message, opts) => {
+        await opts?.onDelta?.({
+          update: { type: "text-delta", text: "Before " },
+        });
+        void Promise.resolve(
+          h.options.local!.customTools!.pi_tool_0!.execute(
+            { path: "a.ts" },
+            { toolCallId: "sdk-call" },
+          ),
+        ).catch(() => {});
+        void opts?.onDelta?.({
+          update: { type: "text-delta", text: "stalled" },
+        });
+        ready = true;
+        return h.run;
+      });
+      vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+      let settled = false;
+      const pending = runCompletion(
+        {
+          ...request,
+          timeoutMs: 60_000,
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              parameters: { type: "object" },
+            },
+          ],
+          onDelta: async ({ update }) => {
+            if (update.type === "text-delta" && update.text === "stalled")
+              await stalled;
+          },
+        },
+        h,
+      );
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      for (let i = 0; i < 100 && !ready; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(ready).toBe(true);
+      for (let i = 0; i < 4; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toMatchObject({
+        text: "Before ",
+        calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
+      });
+      expect(h.run.cancel).toHaveBeenCalledOnce();
+    } finally {
+      releaseStall();
+      vi.useRealTimers();
+    }
   });
 
   it("streams text, closes the isolated agent and removes its workspace", async () => {

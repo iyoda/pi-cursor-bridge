@@ -92,6 +92,20 @@ function estimateCaptureUsage(
   };
 }
 
+/** Keep post-run cleanup attached when an earlier failure is the one rethrown. */
+function attachCleanupCause(
+  failure: unknown,
+  cleanupFailure: unknown,
+): unknown {
+  if (
+    cleanupFailure !== undefined &&
+    failure instanceof Error &&
+    failure.cause === undefined
+  )
+    failure.cause = cleanupFailure;
+  return failure;
+}
+
 export async function runCompletion(
   request: CompletionRequest,
   deps: CompletionDependencies,
@@ -241,10 +255,11 @@ export async function runCompletion(
         await cleanup(agent, run, !cleanupDeferred);
     } catch (error) {
       // A finished answer and a confirmed cancel outrank post-run cleanup.
+      // A failed run keeps this error as its cause, including a retained workspace.
       cleanupFailure = error;
     }
   }
-  if (failure) throw failure;
+  if (failure) throw attachCleanupCause(failure, cleanupFailure);
   if (completed) return completed;
   if (cancelFailed) throw cleanupFailure ?? new Error("SDK cleanup failed");
   if (run?.status === "cancelled") {
@@ -294,19 +309,28 @@ export async function runCompletion(
   async function textBeforeTools(): Promise<void> {
     // Text already accepted by the SDK can sit a few turns behind execute().
     // One setImmediate drops that queued preamble. Wait out a short, fixed
-    // number of turns, including a delivery already inside onDelta. Later
-    // text belongs to the cancelled run and must not stall handoff.
-    const started = Date.now();
-    for (let turn = 0; turn < 8 && Date.now() - started < 1_000; turn += 1) {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      while (pendingDeltas > 0 && Date.now() - started < 1_000) {
+    // number of turns, including a delivery already inside onDelta. A stalled
+    // delivery never settles its waiter, so the 1s timer wakes this wait.
+    // Later text belongs to the cancelled run.
+    let expired = false;
+    const timer = setTimeout(() => {
+      expired = true;
+      for (const waiter of deltaWaiters.splice(0)) waiter();
+    }, 1_000);
+    try {
+      for (let turn = 0; turn < 8 && !expired; turn += 1) {
         await new Promise<void>((resolve) => {
-          deltaWaiters.push(resolve);
-          if (pendingDeltas === 0) resolve();
+          setImmediate(resolve);
         });
+        while (pendingDeltas > 0 && !expired) {
+          await new Promise<void>((resolve) => {
+            deltaWaiters.push(resolve);
+            if (pendingDeltas === 0 || expired) resolve();
+          });
+        }
       }
+    } finally {
+      clearTimeout(timer);
     }
     captured();
   }
