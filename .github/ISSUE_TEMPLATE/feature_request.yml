@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose a feature or a documentation improvement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not file vulnerabilities as issues. Send them to the contact in SECURITY.md.
+        Do not paste API keys, auth files, conversation logs, or the contents of a temporary workspace.
+  - type: textarea
+    attributes:
+      label: Proposal
+      description: Describe what you want to change.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reason
+      description: Describe the current problem and what the proposal would change.
+    validations:
+      required: true
