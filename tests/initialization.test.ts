@@ -132,9 +132,8 @@ describe("completion initialization cleanup", () => {
       },
       { createAgent },
     );
-    const rejected = expect(pending).rejects.toThrow(/circular/i);
-    await vi.runAllTimersAsync();
-    await rejected;
+    // Retries wait on the setTimeout captured at import, not the fake clock.
+    await expect(pending).rejects.toThrow(/circular/i);
     expect(fs.rm).toHaveBeenCalledTimes(2);
     expect(createAgent).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);

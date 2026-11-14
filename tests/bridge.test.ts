@@ -45,6 +45,7 @@ function harness() {
       return status;
     },
     usage,
+    stream: vi.fn<BridgeRun["stream"]>(async function* () {}),
   };
   const dispose = vi.fn(async () => {});
   const send = vi.fn<BridgeAgent["send"]>(async (_message, opts) => {
@@ -262,6 +263,132 @@ describe("official SDK completion", () => {
       expect(aliveBeforeLimit).toBe(true);
       expect(h.run.cancel).toHaveBeenCalledTimes(1);
     });
+
+    it("restarts the idle limit when summary messages arrive without deltas", async () => {
+      const h = harness();
+      const pending: {
+        type: "summary";
+        agent_id: string;
+        run_id: string;
+        status: "running" | "completed";
+      }[] = [];
+      let wake: (() => void) | undefined;
+      let closed = false;
+      vi.mocked(h.send).mockImplementation(async () => h.run);
+      vi.mocked(h.run.stream).mockImplementation(async function* () {
+        for (;;) {
+          if (pending.length > 0) {
+            yield pending.shift()!;
+            continue;
+          }
+          if (closed) return;
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+          });
+        }
+      });
+      const refreshIdle = vi.fn();
+      const emit = async (status: "running" | "completed") => {
+        pending.push({
+          type: "summary",
+          agent_id: "agent-1",
+          run_id: "run-1",
+          status,
+        });
+        const resume = wake;
+        wake = undefined;
+        resume?.();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      };
+      vi.mocked(h.run.wait).mockImplementation(async () => {
+        await vi.advanceTimersByTimeAsync(90);
+        await emit("running");
+        await vi.advanceTimersByTimeAsync(90);
+        await emit("completed");
+        await vi.advanceTimersByTimeAsync(90);
+        closed = true;
+        wake?.();
+        return { id: "run-1", status: "finished", result: "done", usage };
+      });
+      await expect(
+        runCompletion({ ...request, timeoutMs: 100, refreshIdle }, h),
+      ).resolves.toMatchObject({ text: "done" });
+      expect(refreshIdle).toHaveBeenCalledTimes(2);
+      expect(h.run.cancel).not.toHaveBeenCalled();
+    });
+  });
+
+  it("removes the workspace when releasing the caller idle timer throws", async () => {
+    const h = harness();
+    await expect(
+      runCompletion(
+        {
+          ...request,
+          releaseIdle: () => {
+            throw new Error("idle release failed");
+          },
+        },
+        h,
+      ),
+    ).resolves.toMatchObject({ calls: [], text: "hello" });
+    await expect(access(h.options.local!.cwd!)).rejects.toThrow();
+  });
+
+  it("keeps the completion result when summary observation fails", async () => {
+    const h = harness();
+    vi.mocked(h.run.stream).mockImplementation(async function* () {
+      throw new Error("summary stream failed");
+    });
+    await expect(runCompletion(request, h)).resolves.toMatchObject({
+      text: "hello",
+    });
+  });
+
+  it("keeps the completion result when the summary stream stays open", async () => {
+    const h = harness();
+    vi.mocked(h.run.stream).mockImplementation(async function* () {
+      await new Promise<void>(() => {});
+    });
+    await expect(runCompletion(request, h)).resolves.toMatchObject({
+      text: "hello",
+    });
+  });
+
+  it("keeps watching summaries when refreshIdle throws", async () => {
+    const h = harness();
+    const refreshes: string[] = [];
+    vi.mocked(h.send).mockImplementation(async () => h.run);
+    vi.mocked(h.run.stream).mockImplementation(async function* () {
+      yield {
+        type: "summary" as const,
+        agent_id: "agent-1",
+        run_id: "run-1",
+        status: "running" as const,
+      };
+      yield {
+        type: "summary" as const,
+        agent_id: "agent-1",
+        run_id: "run-1",
+        status: "completed" as const,
+      };
+    });
+    vi.mocked(h.run.wait).mockImplementation(async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return { id: "run-1", status: "finished", result: "done", usage };
+    });
+    await expect(
+      runCompletion(
+        {
+          ...request,
+          refreshIdle: () => {
+            refreshes.push("refresh");
+            if (refreshes.length === 1) throw new Error("refresh failed");
+          },
+        },
+        h,
+      ),
+    ).resolves.toMatchObject({ text: "done" });
+    expect(refreshes).toEqual(["refresh", "refresh"]);
   });
 
   it.each([

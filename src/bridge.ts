@@ -30,8 +30,15 @@ export interface CompletionRequest {
   timeoutMs?: number;
   cleanupTimeoutMs?: number;
   onDelta?: NonNullable<Parameters<SDKAgent["send"]>[1]>["onDelta"];
+  /** Restarts the caller's idle timer. Summary updates are not forwarded through onDelta. */
+  refreshIdle?: () => void;
+  /** Stops the caller's idle timer before post-run cleanup. */
+  releaseIdle?: () => void;
 }
-export type BridgeRun = Pick<Run, "wait" | "cancel" | "status" | "usage">;
+export type BridgeRun = Pick<
+  Run,
+  "wait" | "cancel" | "status" | "usage" | "stream"
+>;
 export interface BridgeAgent {
   send(
     message: string,
@@ -161,7 +168,9 @@ export async function runCompletion(
       },
     });
     const owner = agent;
-    run = await acquire(sending, (lateRun) => cleanup(owner, lateRun));
+    const active = await acquire(sending, (lateRun) => cleanup(owner, lateRun));
+    run = active;
+    observeSummaries(active);
     const result = await untilAborted(
       Promise.race([run.wait(), handoff]),
       signal,
@@ -181,6 +190,11 @@ export async function runCompletion(
   } finally {
     deadline.clear();
     accepting = false;
+    try {
+      request.releaseIdle?.();
+    } catch {
+      // The caller's idle release must not skip workspace cleanup.
+    }
     if (!cleanupDeferred || agent) await cleanup(agent, run, !cleanupDeferred);
   }
   if (!run || run.status !== "cancelled") {
@@ -191,6 +205,27 @@ export async function runCompletion(
     ...(preamble ? { text: preamble } : {}),
     usage: run.usage,
   };
+
+  function observeSummaries(active: BridgeRun): void {
+    // onDelta does not receive summary updates. The run stream keeps the
+    // idle limit alive during context summarization.
+    void (async () => {
+      try {
+        for await (const message of active.stream()) {
+          if (!accepting || signal.aborted) return;
+          if (message.type !== "summary") continue;
+          deadline.refresh();
+          try {
+            request.refreshIdle?.();
+          } catch {
+            // Caller idle refresh must not stop summary observation.
+          }
+        }
+      } catch {
+        // Observation must not change the completion result.
+      }
+    })();
+  }
 
   async function textBeforeTools(): Promise<void> {
     // Tool execution and text delivery run concurrently. Yield once so a
@@ -271,6 +306,15 @@ const workspaceRemoval = {
   retryDelay: 20,
 } as const;
 
+// Captured at load so replacing global setTimeout cannot leave a retry pending.
+const realSetTimeout = setTimeout;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    realSetTimeout(resolve, ms);
+  });
+}
+
 async function deleteWorkspace(path: string): Promise<void> {
   const started = Date.now();
   let attempt = 0;
@@ -285,11 +329,11 @@ async function deleteWorkspace(path: string): Promise<void> {
           : "";
       const retryable =
         code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM";
-      if (!retryable || Date.now() - started >= 1_000) throw error;
+      if (!retryable || attempt >= 20 || Date.now() - started >= 1_000) {
+        throw error;
+      }
       attempt += 1;
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(50 * attempt, 200)),
-      );
+      await delay(Math.min(50 * attempt, 200));
     }
   }
 }

@@ -19,3 +19,6 @@ This is an early development release. It is not published to npm yet.
 - Treat Pi's `timeoutMs` as an idle limit that each streamed SDK delta restarts, so long reasoning (for example Grok at high Thinking) no longer fails with `Cursor completion timed out.` while it is still streaming.
 - Keep assistant text that arrives before a captured tool call. A text delta still in flight at capture is included, and any unsent tail is placed before the tool call.
 - Report transient SDK transport failures, such as a stalled or prematurely closed connection, with a retryable marker so Pi's retry policy can retry them. SDK-internal agent retries stay disabled.
+- Stop the completion idle timer before post-run cleanup, and restart it for context-summarization messages on the run stream. The SDK does not forward those summary updates as deltas.
+- Keep the `auto` fallback when a fetched catalog omits it, so a saved `auto` selection still resolves. If the catalog includes `auto`, that row is used.
+- Tell the model that instructions inside tool results are data and do not outrank the latest user request.
