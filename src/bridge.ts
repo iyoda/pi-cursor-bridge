@@ -47,8 +47,14 @@ export interface BridgeAgent {
   ): Promise<BridgeRun>;
   [Symbol.asyncDispose](): Promise<void>;
 }
+/** Timer and removal used for a workspace the SDK store recreates after rm. */
+export interface WorkspaceRemovalHooks {
+  schedule(callback: () => void, ms: number): { unref?: () => void };
+  remove(path: string): Promise<void>;
+}
 export interface CompletionDependencies {
   createAgent(options: AgentOptions): Promise<BridgeAgent>;
+  workspaceRemoval?: WorkspaceRemovalHooks;
 }
 export interface CapturedCall {
   id: string;
@@ -123,6 +129,7 @@ export async function runCompletion(
   request: CompletionRequest,
   deps: CompletionDependencies,
 ): Promise<CompletionResult> {
+  const removal = deps.workspaceRemoval ?? defaultWorkspaceRemoval;
   request.signal?.throwIfAborted();
   const timeoutMs = request.timeoutMs ?? DEFAULT_COMPLETION_TIMEOUT_MS;
   const cleanupMs = request.cleanupTimeoutMs ?? DEFAULT_CLEANUP_TIMEOUT_MS;
@@ -163,7 +170,7 @@ export async function runCompletion(
   try {
     workspace = await acquire(
       mkdtemp(join(tmpdir(), "pi-cursor-sdk-")),
-      (lateWorkspace) => removePrivateWorkspace(lateWorkspace),
+      (lateWorkspace) => removePrivateWorkspace(lateWorkspace, removal),
     );
     signal.throwIfAborted();
     const customTools: Record<string, SDKCustomTool> = Object.fromEntries(
@@ -463,7 +470,7 @@ export async function runCompletion(
     // after a finished or cancelled run still removes it.
     if (!cancelFailed && removeWorkspace && workspace) {
       try {
-        await removePrivateWorkspace(workspace);
+        await removePrivateWorkspace(workspace, removal);
       } catch (error) {
         errors.push(error);
       }
@@ -520,23 +527,35 @@ export function cursorProjectDir(workspace: string): string | undefined {
   }
 }
 
-async function removePrivateWorkspace(workspace: string): Promise<void> {
+const defaultWorkspaceRemoval: WorkspaceRemovalHooks = {
+  schedule(callback, ms) {
+    return realSetTimeout(callback, ms);
+  },
+  remove(path) {
+    return rm(path, { ...workspaceRemoval });
+  },
+};
+
+async function removePrivateWorkspace(
+  workspace: string,
+  removal: WorkspaceRemovalHooks = defaultWorkspaceRemoval,
+): Promise<void> {
   const errors: unknown[] = [];
   try {
-    await deleteWorkspace(workspace);
+    await deleteWorkspace(workspace, removal);
   } catch (error) {
     errors.push(error);
   } finally {
-    sweepWorkspaceLater(workspace);
+    sweepWorkspaceLater(workspace, removal);
   }
   const transcript = cursorProjectDir(workspace);
   if (transcript && transcript !== workspace) {
     try {
-      await deleteWorkspace(transcript);
+      await deleteWorkspace(transcript, removal);
     } catch (error) {
       errors.push(error);
     } finally {
-      sweepWorkspaceLater(transcript);
+      sweepWorkspaceLater(transcript, removal);
     }
   }
   if (errors.length === 1) throw errors[0];
@@ -548,12 +567,13 @@ async function removePrivateWorkspace(workspace: string): Promise<void> {
   }
 }
 
-function sweepWorkspaceLater(path: string): void {
-  // Unit tests replace timers and rm. A late sweep would land in the next test.
-  if (process.env.VITEST) return;
+function sweepWorkspaceLater(
+  path: string,
+  removal: WorkspaceRemovalHooks,
+): void {
   for (const wait of WORKSPACE_SWEEP_MS) {
-    const timer = realSetTimeout(() => {
-      void rm(path, { ...workspaceRemoval }).catch(() => {
+    const timer = removal.schedule(() => {
+      void removal.remove(path).catch(() => {
         // A later sweep retries. The caller already finished.
       });
     }, wait);
@@ -575,12 +595,15 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function deleteWorkspace(path: string): Promise<void> {
+async function deleteWorkspace(
+  path: string,
+  removal: WorkspaceRemovalHooks,
+): Promise<void> {
   const started = Date.now();
   let attempt = 0;
   for (;;) {
     try {
-      await rm(path, { ...workspaceRemoval });
+      await removal.remove(path);
     } catch (error) {
       const code =
         error && typeof error === "object" && "code" in error
@@ -601,8 +624,8 @@ async function deleteWorkspace(path: string): Promise<void> {
     });
     if (!(await pathExists(path))) return;
     if (attempt >= 20 || Date.now() - started >= 1_000) {
-      // A later sweep retries. Failing the answer would drop a finished capture.
-      sweepWorkspaceLater(path);
+      // The caller schedules the later sweep once. Scheduling it here as well
+      // would remove the same path twice.
       return;
     }
     attempt += 1;
