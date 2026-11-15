@@ -8,6 +8,10 @@
   "bugs": {
     "email": "iyoda-github@atikoro.net"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atikoro/pi-cursor-sdk.git"
+  },
   "publishConfig": {
     "access": "public"
   },

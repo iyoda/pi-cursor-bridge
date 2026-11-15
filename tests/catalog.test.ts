@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ModelListItem, ModelVariant } from "@cursor/sdk";
-import { buildCatalog, resolveSelection } from "../src/catalog.js";
+import {
+  buildCatalog,
+  catalogFromStored,
+  resolveSelection,
+  serializeSelections,
+} from "../src/catalog.js";
 
 function variant(
   params: Record<string, string>,
@@ -92,21 +97,15 @@ describe("SDK catalog", () => {
   it.each([
     ["none", "off"],
     ["extra-high", "xhigh"],
-  ])(
-    "rejects ambiguous routes %s/%s for the same Pi level",
-    (first, second) => {
-      expect(() =>
-        buildCatalog([
-          model({
-            variants: [
-              variant({ effort: first! }),
-              variant({ effort: second! }),
-            ],
-          }),
-        ]),
-      ).toThrow(/ambiguous.*route/i);
-    },
-  );
+  ])("omits ambiguous routes %s/%s for the same Pi level", (first, second) => {
+    const catalog = buildCatalog([
+      model({
+        variants: [variant({ effort: first! }), variant({ effort: second! })],
+      }),
+    ]);
+    expect(catalog.models).toEqual([]);
+    expect(catalog.skipped.join("\n")).toMatch(/ambiguous.*route/i);
+  });
 
   it.each<{ label: string; items: ModelListItem[] }>([
     {
@@ -160,9 +159,15 @@ describe("SDK catalog", () => {
       label: "different duplicate SDK ids",
       items: [model({ displayName: "One" }), model({ displayName: "Two" })],
     },
-  ])("rejects model ID collisions: $label", ({ items }) => {
-    expect(() => buildCatalog(items)).toThrow(/collision|duplicate/i);
-  });
+  ])(
+    "omits the inconsistent model instead of dropping the catalog: $label",
+    ({ items }) => {
+      const kept = { id: "kept", displayName: "Kept" };
+      const catalog = buildCatalog([kept, ...items]);
+      expect(catalog.models.map((entry) => entry.id)).toContain("kept");
+      expect(catalog.skipped.join("\n")).toMatch(/collision|duplicate/i);
+    },
+  );
 
   it.each<{ label: string; item: ModelListItem }>([
     {
@@ -214,11 +219,16 @@ describe("SDK catalog", () => {
         ],
       }),
     },
-  ])("rejects unsafe parameterization: $label", ({ item }) => {
-    expect(() => buildCatalog([item])).toThrow(
-      /variants|effort|thinking|parameter/i,
-    );
-  });
+  ])(
+    "omits unsafe parameterization without dropping other models: $label",
+    ({ item }) => {
+      const catalog = buildCatalog([{ id: "kept", displayName: "Kept" }, item]);
+      expect(catalog.models.map((entry) => entry.id)).toEqual(["kept"]);
+      expect(catalog.skipped.join("\n")).toMatch(
+        /variants|effort|thinking|parameter/i,
+      );
+    },
+  );
 
   it("collapses thinking-only booleans to off/high while preserving other fixed params", () => {
     const off = variant({ context: "200k", thinking: "false", fast: "false" });
@@ -395,7 +405,11 @@ describe("SDK catalog", () => {
       params: low.params,
       maxMode: false,
     });
-    expect(() => resolveSelection(catalog, "gpt-5.5")).toThrow(/unsupported/i);
+    expect(resolveSelection(catalog, "gpt-5.5")).toEqual({
+      id: "gpt-5.5",
+      params: high.params,
+      maxMode: false,
+    });
     expect(() => resolveSelection(catalog, "gpt-5.5", "medium")).toThrow(
       /unsupported/i,
     );
@@ -426,5 +440,31 @@ describe("SDK catalog", () => {
       /unsupported/i,
     );
     expect(() => resolveSelection(catalog, "missing")).toThrow(/unknown/i);
+  });
+
+  it("restores saved selections and ignores a damaged row", () => {
+    const catalog = buildCatalog([
+      {
+        id: "gpt-5.5",
+        displayName: "GPT-5.5",
+        variants: [
+          variant({ context: "272k", reasoning: "high" }, { isDefault: true }),
+        ],
+      },
+    ]);
+    const stored = catalogFromStored({
+      models: [...catalog.models, { id: "damaged", name: "Damaged" }],
+      cursorSdkSelections: serializeSelections(catalog),
+    });
+    expect(stored?.models.map((entry) => entry.id)).toEqual([
+      "gpt-5.5",
+      "auto",
+    ]);
+    expect(resolveSelection(stored!, "gpt-5.5").params).toEqual([
+      { id: "context", value: "272k" },
+      { id: "reasoning", value: "high" },
+    ]);
+    expect(catalogFromStored({ models: [] })).toBeUndefined();
+    expect(catalogFromStored(null)).toBeUndefined();
   });
 });

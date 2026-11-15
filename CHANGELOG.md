@@ -9,8 +9,10 @@ This is an early development release. It is not published to npm yet.
 - Run inference through the official `@cursor/sdk` as Pi's independent provider `cursor-sdk`. The existing `cursor` provider is not replaced.
 - Keep Pi's tool execution, permissions, and history. SDK custom tools are used only to capture requests.
 - Choose the model, fast, and Max Mode with `/model`, and choose effort with Pi's Thinking controls.
-- Text only. Images, custom fetch, temperature, explicit maxTokens, and deferred execution are rejected before a request is sent.
-- If catalog conversion fails, show the reason and keep the previous catalog.
+- Text only. Images, custom fetch, temperature, and deferred execution are rejected before a request is sent. A request `maxTokens` is not forwarded and does not reject the request, because the SDK has no output cap.
+- If one model cannot be converted, omit that model and publish the rest. If none remain, show the reason and keep the previous catalog.
+- Restore the stored catalog, including SDK selections, before the next fetch so a saved model still resolves. When Pi omits `reasoning`, use the `off` route when that row advertises one, and otherwise the SDK default variant.
+- Put the short harness notes after the JSON transcript, so they are not the opening the model treats as the request.
 - Ship the changelog, code of conduct, contributing guide, and vulnerability contact with the package.
 - Do not bundle `@earendil-works/pi-ai` or `@earendil-works/pi-coding-agent`, which Pi provides. Their peer range is `*`. Validation uses Pi 1.5.2.
 - Retry removal of the temporary workspace when the SDK store is still writing under `state`, so cleanup does not fail with `ENOTEMPTY`. If that store recreates the directory after `rm` returns, remove it again.

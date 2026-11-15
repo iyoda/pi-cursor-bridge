@@ -159,7 +159,6 @@ const BLOCKED_TEXT = [
   "SDK cleanup timed out",
   "not confirmed",
   "Timeouts must be",
-  "maxTokens is not supported",
   "Unsupported Cursor SDK request control",
   "image input and image tool results are not supported",
   "onPayload must return",
