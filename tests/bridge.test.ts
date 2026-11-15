@@ -73,6 +73,15 @@ function harness() {
   };
 }
 
+function toolCallStarted(callId = "sdk-call") {
+  return {
+    type: "tool-call-started" as const,
+    callId,
+    modelCallId: `${callId}-model`,
+    toolCall: { type: "shell" as const, args: { command: "true" } },
+  };
+}
+
 describe("official SDK completion", () => {
   it("returns on abort during acquisition and disposes an agent that arrives late", async () => {
     const h = harness();
@@ -426,10 +435,11 @@ describe("official SDK completion", () => {
 
   it("does not return executable calls when cancellation fails", async () => {
     const h = harness();
-    h.send.mockImplementation(async () => {
+    h.send.mockImplementation(async (_message, opts) => {
       void Promise.resolve(
         h.options.local!.customTools!.pi_tool_0!.execute({}, {}),
       ).catch(() => {});
+      await opts?.onDelta?.({ update: toolCallStarted() });
       return h.run;
     });
     vi.mocked(h.run.cancel).mockRejectedValue(new Error("cancel failed"));
@@ -473,10 +483,11 @@ describe("official SDK completion", () => {
     "does not return captured calls when the run ends %s instead of cancelled",
     async (terminal) => {
       const h = harness();
-      h.send.mockImplementation(async () => {
+      h.send.mockImplementation(async (_message, opts) => {
         void Promise.resolve(
           h.options.local!.customTools!.pi_tool_0!.execute({}, {}),
         ).catch(() => {});
+        await opts?.onDelta?.({ update: toolCallStarted() });
         return h.run;
       });
       vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -506,11 +517,12 @@ describe("official SDK completion", () => {
   it("captures tools without executing them and cancels before returning to Pi", async () => {
     const h = harness();
     const order: string[] = [];
-    h.send.mockImplementation(async () => {
+    h.send.mockImplementation(async (_message, opts) => {
       const callback = h.options.local!.customTools!.pi_tool_0!;
       void Promise.resolve(
         callback.execute({ path: "file.ts" }, { toolCallId: "sdk-call" }),
       ).catch(() => {});
+      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
       return h.run;
     });
     vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -548,13 +560,14 @@ describe("official SDK completion", () => {
   it("returns all synchronously captured calls only after cleanup", async () => {
     const h = harness();
     const rejected: unknown[] = [];
-    h.send.mockImplementation(async () => {
+    h.send.mockImplementation(async (_message, opts) => {
       const tool = h.options.local!.customTools!.pi_tool_0!;
       for (const id of ["first", "second"]) {
         void Promise.resolve(tool.execute({ id }, { toolCallId: id })).catch(
           (error) => rejected.push(error),
         );
       }
+      await opts?.onDelta?.({ update: toolCallStarted("first") });
       return h.run;
     });
     vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -589,6 +602,7 @@ describe("official SDK completion", () => {
           { toolCallId: "sdk-call" },
         ),
       ).catch(() => {});
+      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
       return h.run;
     });
     vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -629,6 +643,7 @@ describe("official SDK completion", () => {
           toolCallId: "sdk-call",
         }),
       ).catch(() => {});
+      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
       return h.run;
     });
     vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -685,6 +700,7 @@ describe("official SDK completion", () => {
       });
       setImmediate(releaseTail);
       await inflight;
+      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
       return h.run;
     });
     vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -783,6 +799,261 @@ describe("official SDK completion", () => {
       expect(h.run.cancel).toHaveBeenCalledOnce();
     } finally {
       releaseStall();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps text delivered after execute until tool-call-started", async () => {
+    const h = harness();
+    const startedAt = Date.now();
+    h.send.mockImplementation(async (_message, opts) => {
+      void Promise.resolve(
+        h.options.local!.customTools!.pi_tool_0!.execute(
+          { path: "a.ts" },
+          { toolCallId: "sdk-call" },
+        ),
+      ).catch(() => {});
+      await opts?.onDelta?.({
+        update: { type: "text-delta", text: "Run echo. " },
+      });
+      await opts?.onDelta?.({
+        update: { type: "thinking-completed", thinkingDurationMs: 20 },
+      });
+      await opts?.onDelta?.({ update: { type: "text-delta", text: "Now." } });
+      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
+      await opts?.onDelta?.({
+        update: { type: "text-delta", text: " hidden" },
+      });
+      return h.run;
+    });
+    vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+    const result = await runCompletion(
+      {
+        ...request,
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object" },
+          },
+        ],
+      },
+      h,
+    );
+    expect(Date.now() - startedAt).toBeLessThan(800);
+    expect(result).toMatchObject({
+      text: "Run echo. Now.",
+      calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
+    });
+    expect(h.run.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps post-execute text when tool-call-started stays quiet", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const h = harness();
+      let ready = false;
+      h.send.mockImplementation(async (_message, opts) => {
+        void Promise.resolve(
+          h.options.local!.customTools!.pi_tool_0!.execute(
+            { path: "a.ts" },
+            { toolCallId: "sdk-call" },
+          ),
+        ).catch(() => {});
+        await opts?.onDelta?.({
+          update: { type: "text-delta", text: "late text" },
+        });
+        ready = true;
+        return h.run;
+      });
+      vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+      let settled = false;
+      const pending = runCompletion(
+        {
+          ...request,
+          timeoutMs: 60_000,
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              parameters: { type: "object" },
+            },
+          ],
+        },
+        h,
+      );
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      for (let i = 0; i < 100 && !ready; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(ready).toBe(true);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(pending).resolves.toMatchObject({
+        text: "late text",
+        calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
+      });
+      expect(h.run.cancel).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps text after execute when an earlier tool-call-started already passed", async () => {
+    const h = harness();
+    const startedAt = Date.now();
+    h.send.mockImplementation(async (_message, opts) => {
+      await opts?.onDelta?.({ update: toolCallStarted("earlier") });
+      void Promise.resolve(
+        h.options.local!.customTools!.pi_tool_0!.execute(
+          { path: "a.ts" },
+          { toolCallId: "sdk-call" },
+        ),
+      ).catch(() => {});
+      await opts?.onDelta?.({
+        update: { type: "text-delta", text: "after earlier marker" },
+      });
+      await opts?.onDelta?.({ update: toolCallStarted("different-id") });
+      await opts?.onDelta?.({
+        update: { type: "text-delta", text: " hidden" },
+      });
+      return h.run;
+    });
+    vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+    const result = await runCompletion(
+      {
+        ...request,
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object" },
+          },
+        ],
+      },
+      h,
+    );
+    expect(Date.now() - startedAt).toBeLessThan(800);
+    expect(result).toMatchObject({
+      text: "after earlier marker",
+      calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
+    });
+    expect(h.run.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("includes text still in flight when tool-call-started arrives", async () => {
+    const h = harness();
+    let releaseTail!: () => void;
+    const tailHeld = new Promise<void>((resolve) => {
+      releaseTail = resolve;
+    });
+    h.send.mockImplementation(async (_message, opts) => {
+      void Promise.resolve(
+        h.options.local!.customTools!.pi_tool_0!.execute(
+          { path: "a.ts" },
+          { toolCallId: "sdk-call" },
+        ),
+      ).catch(() => {});
+      const inflight = opts?.onDelta?.({
+        update: { type: "text-delta", text: "late" },
+      });
+      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
+      releaseTail();
+      await inflight;
+      return h.run;
+    });
+    vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+    const result = await runCompletion(
+      {
+        ...request,
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object" },
+          },
+        ],
+        onDelta: async ({ update }) => {
+          if (update.type === "text-delta" && update.text === "late")
+            await tailHeld;
+        },
+      },
+      h,
+    );
+    expect(result).toMatchObject({
+      text: "late",
+      calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
+    });
+    expect(h.run.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("extends the quiet handoff when another delta arrives", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const h = harness();
+      let onDelta: NonNullable<
+        Parameters<BridgeAgent["send"]>[1]
+      >["onDelta"] = async () => {};
+      let ready = false;
+      h.send.mockImplementation(async (_message, opts) => {
+        onDelta = opts?.onDelta ?? onDelta;
+        void Promise.resolve(
+          h.options.local!.customTools!.pi_tool_0!.execute(
+            { path: "a.ts" },
+            { toolCallId: "sdk-call" },
+          ),
+        ).catch(() => {});
+        ready = true;
+        return h.run;
+      });
+      vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+      let settled = false;
+      const pending = runCompletion(
+        {
+          ...request,
+          timeoutMs: 60_000,
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              parameters: { type: "object" },
+            },
+          ],
+        },
+        h,
+      );
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      for (let i = 0; i < 100 && !ready; i++) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      expect(ready).toBe(true);
+      await vi.advanceTimersByTimeAsync(900);
+      expect(settled).toBe(false);
+      await onDelta({ update: { type: "text-delta", text: "late" } });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(800);
+      await expect(pending).resolves.toMatchObject({
+        text: "late",
+        calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
+      });
+      expect(h.run.cancel).toHaveBeenCalledOnce();
+    } finally {
       vi.useRealTimers();
     }
   });

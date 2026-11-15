@@ -17,7 +17,7 @@ This is an early development release. It is not published to npm yet.
 - Show a rate-limit failure as `[resource_exhausted] Cursor rate limit or usage limit was reached.` Pi adds one `Error:` prefix, so a generic SDK message of `Error` is not repeated.
 - `npm run pack:check` checks the tarball file list, the MIT license, the `*` peer range for the Pi packages, and that `@cursor/sdk` stays an external import. CI runs the same check.
 - Treat Pi's `timeoutMs` as an idle limit that each streamed SDK delta restarts, so long reasoning (for example Grok at high Thinking) no longer fails with `Cursor completion timed out.` while it is still streaming.
-- Keep assistant text that arrives before a captured tool call. A text delta still in flight at capture is included, and any unsent tail is placed before the tool call.
+- Keep assistant text that arrives before a captured tool call, including text the SDK delivers after `execute()` and before `tool-call-started`. A text delta still in flight at that marker is included. If the marker never arrives, one second without a later delta closes the handoff. Any unsent tail is placed before the tool call.
 - Report transient SDK transport failures, such as a stalled or prematurely closed connection, with a retryable marker so Pi's retry policy can retry them. SDK-internal agent retries stay disabled.
 - Stop the completion idle timer before post-run cleanup, and restart it for context-summarization messages on the run stream. The SDK does not forward those summary updates as deltas.
 - Keep the `auto` fallback when a fetched catalog omits it, so a saved `auto` selection still resolves. If the catalog includes `auto`, that row is used.

@@ -62,6 +62,12 @@ export interface CompletionResult {
 }
 /** Same chars/4 split Pi uses when a message has no reported usage. */
 const ESTIMATED_CHARS_PER_TOKEN = 4;
+/**
+ * After execute(), close the preamble if tool-call-started never arrives and
+ * no later delta starts. Each later delta restarts the wait. The same
+ * deadline abandons a delta that never returns.
+ */
+const PREAMBLE_QUIET_MS = 1_000;
 
 /**
  * Cancelled tool-capture runs never record SDK usage. Estimate the context
@@ -131,9 +137,12 @@ export async function runCompletion(
   const calls: CapturedCall[] = [];
   const releases: (() => void)[] = [];
   const deltaWaiters: (() => void)[] = [];
+  const toolWaiters: (() => void)[] = [];
   let preamble = "";
   let pendingDeltas = 0;
   let drainScheduled = false;
+  let preambleOpen = true;
+  let armQuiet: () => void = () => {};
   let completed: CompletionResult | undefined;
   let failure: unknown;
   let cleanupFailure: unknown;
@@ -201,14 +210,24 @@ export async function runCompletion(
     const sending = agent.send(request.prompt, {
       onDelta: (event) => {
         pendingDeltas += 1;
+        const update = event.update;
+        const include = preambleOpen;
+        if (drainScheduled && update.type === "tool-call-started") {
+          if (preambleOpen) {
+            preambleOpen = false;
+            // In-flight deltas keep a full quiet budget after the marker.
+            armQuiet();
+            for (const waiter of toolWaiters.splice(0)) waiter();
+          }
+        } else if (drainScheduled && preambleOpen) {
+          armQuiet();
+        }
         const delivery = (async () => {
           try {
-            if (!accepting || signal.aborted) return;
+            if (!accepting || signal.aborted || !include) return;
             deadline.refresh();
             await request.onDelta?.(event);
-            if (event.update.type === "text-delta") {
-              preamble += event.update.text;
-            }
+            if (update.type === "text-delta") preamble += update.text;
           } finally {
             pendingDeltas -= 1;
             if (pendingDeltas === 0) {
@@ -307,30 +326,42 @@ export async function runCompletion(
   }
 
   async function textBeforeTools(): Promise<void> {
-    // Text already accepted by the SDK can sit a few turns behind execute().
-    // One setImmediate drops that queued preamble. Wait out a short, fixed
-    // number of turns, including a delivery already inside onDelta. A stalled
-    // delivery never settles its waiter, so the 1s timer wakes this wait.
-    // Later text belongs to the cancelled run.
-    let expired = false;
-    const timer = setTimeout(() => {
-      expired = true;
-      for (const waiter of deltaWaiters.splice(0)) waiter();
-    }, 1_000);
+    // execute() can run before the SDK flushes the text that precedes the
+    // tool call. That text stays ahead of tool-call-started in the delta
+    // stream, so keep accepting until the first marker after capture starts.
+    // callId is not compared with toolCallId. One second without a later
+    // delta, or a delta that never returns, closes the handoff anyway.
+    // The marker restarts that second so a delta already in flight can finish.
+    let quiet = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        quiet = true;
+        preambleOpen = false;
+        for (const waiter of toolWaiters.splice(0)) waiter();
+        for (const waiter of deltaWaiters.splice(0)) waiter();
+      }, PREAMBLE_QUIET_MS);
+    };
+    armQuiet = arm;
+    arm();
     try {
-      for (let turn = 0; turn < 8 && !expired; turn += 1) {
+      while (preambleOpen && !quiet) {
         await new Promise<void>((resolve) => {
-          setImmediate(resolve);
+          if (!preambleOpen || quiet) resolve();
+          else toolWaiters.push(resolve);
         });
-        while (pendingDeltas > 0 && !expired) {
-          await new Promise<void>((resolve) => {
-            deltaWaiters.push(resolve);
-            if (pendingDeltas === 0 || expired) resolve();
-          });
-        }
+      }
+      while (pendingDeltas > 0 && !quiet) {
+        await new Promise<void>((resolve) => {
+          deltaWaiters.push(resolve);
+          if (pendingDeltas === 0 || quiet) resolve();
+        });
       }
     } finally {
       clearTimeout(timer);
+      armQuiet = () => {};
+      preambleOpen = false;
     }
     captured();
   }
