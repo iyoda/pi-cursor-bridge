@@ -1058,6 +1058,76 @@ describe("official SDK completion", () => {
     }
   });
 
+  it("closes immediately when the same tool-call-started arrived before execute", async () => {
+    const h = harness();
+    const startedAt = Date.now();
+    h.send.mockImplementation(async (_message, opts) => {
+      await opts?.onDelta?.({
+        update: { type: "text-delta", text: "before " },
+      });
+      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
+      void Promise.resolve(
+        h.options.local!.customTools!.pi_tool_0!.execute(
+          { path: "a.ts" },
+          { toolCallId: "sdk-call" },
+        ),
+      ).catch(() => {});
+      await opts?.onDelta?.({
+        update: { type: "text-delta", text: "after" },
+      });
+      return h.run;
+    });
+    vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+    const result = await runCompletion(
+      {
+        ...request,
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: { type: "object" },
+          },
+        ],
+      },
+      h,
+    );
+    expect(Date.now() - startedAt).toBeLessThan(800);
+    expect(result).toMatchObject({
+      text: "before ",
+      calls: [{ id: "sdk-call", name: "read", arguments: { path: "a.ts" } }],
+    });
+    expect(h.run.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a tool execute queued after the first tool-call-started", async () => {
+    const h = harness();
+    h.send.mockImplementation(async (_message, opts) => {
+      const tool = h.options.local!.customTools!.pi_tool_0!;
+      void Promise.resolve(
+        tool.execute({ id: "first" }, { toolCallId: "first" }),
+      ).catch(() => {});
+      await opts?.onDelta?.({ update: toolCallStarted("first") });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      void Promise.resolve(
+        tool.execute({ id: "second" }, { toolCallId: "second" }),
+      ).catch(() => {});
+      return h.run;
+    });
+    vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+    const result = await runCompletion(
+      {
+        ...request,
+        tools: [{ name: "echo", description: "echo", parameters: {} }],
+      },
+      h,
+    );
+    expect(result.calls).toEqual([
+      { id: "first", name: "echo", arguments: { id: "first" } },
+      { id: "second", name: "echo", arguments: { id: "second" } },
+    ]);
+    expect(h.run.cancel).toHaveBeenCalledOnce();
+  });
+
   it("streams text, closes the isolated agent and removes its workspace", async () => {
     const h = harness();
     const deltas: string[] = [];

@@ -1,5 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlLocalAgentStore } from "@cursor/sdk";
@@ -68,6 +68,13 @@ const ESTIMATED_CHARS_PER_TOKEN = 4;
  * deadline abandons a delta that never returns.
  */
 const PREAMBLE_QUIET_MS = 1_000;
+/**
+ * Executes already queued behind the first marker still belong to this batch.
+ * The wait restarts when another execute arrives, and stops after a few quiet
+ * turns. The limit keeps a callback that never settles from holding the handoff.
+ */
+const QUEUED_CAPTURE_TURNS = 8;
+const QUEUED_CAPTURE_LIMIT = 64;
 
 /**
  * Cancelled tool-capture runs never record SDK usage. Estimate the context
@@ -138,6 +145,7 @@ export async function runCompletion(
   const releases: (() => void)[] = [];
   const deltaWaiters: (() => void)[] = [];
   const toolWaiters: (() => void)[] = [];
+  const startedIds = new Set<string>();
   let preamble = "";
   let pendingDeltas = 0;
   let drainScheduled = false;
@@ -170,14 +178,19 @@ export async function runCompletion(
           ) {
             if (!accepting || signal.aborted)
               return Promise.reject(new Error("Cursor run is closed."));
+            const toolCallId = context.toolCallId;
             calls.push({
-              id: context.toolCallId ?? `pi-sdk-${calls.length}`,
+              id: toolCallId ?? `pi-sdk-${calls.length}`,
               name: tool.name,
               arguments: args,
             });
+            // A marker for this call can arrive before execute(). Another
+            // call's marker must not close the preamble.
+            if (toolCallId !== undefined && startedIds.has(toolCallId))
+              closePreamble();
             if (!drainScheduled) {
               drainScheduled = true;
-              void textBeforeTools().catch(() => captured());
+              void captureBatch().catch(() => captured());
             }
             return new Promise<never>((_resolve, reject) => {
               releases.push(() =>
@@ -212,13 +225,12 @@ export async function runCompletion(
         pendingDeltas += 1;
         const update = event.update;
         const include = preambleOpen;
-        if (drainScheduled && update.type === "tool-call-started") {
-          if (preambleOpen) {
-            preambleOpen = false;
-            // In-flight deltas keep a full quiet budget after the marker.
-            armQuiet();
-            for (const waiter of toolWaiters.splice(0)) waiter();
-          }
+        if (update.type === "tool-call-started") {
+          startedIds.add(update.callId);
+          // The first marker after capture closes the preamble. Its callId
+          // can differ from toolCallId; a marker that arrived earlier is
+          // matched in execute() instead.
+          if (drainScheduled && preambleOpen) closePreamble();
         } else if (drainScheduled && preambleOpen) {
           armQuiet();
         }
@@ -329,9 +341,11 @@ export async function runCompletion(
     // execute() can run before the SDK flushes the text that precedes the
     // tool call. That text stays ahead of tool-call-started in the delta
     // stream, so keep accepting until the first marker after capture starts.
-    // callId is not compared with toolCallId. One second without a later
-    // delta, or a delta that never returns, closes the handoff anyway.
-    // The marker restarts that second so a delta already in flight can finish.
+    // A marker that already arrived for this toolCallId closes in execute(),
+    // so that order does not wait out the quiet period. A different call's
+    // earlier marker does not. One second without a later delta, or a delta
+    // that never returns, closes the preamble anyway. The marker restarts
+    // that second so a delta already in flight can finish.
     let quiet = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const arm = () => {
@@ -363,7 +377,39 @@ export async function runCompletion(
       armQuiet = () => {};
       preambleOpen = false;
     }
-    captured();
+  }
+
+  function closePreamble(): void {
+    if (!preambleOpen) return;
+    preambleOpen = false;
+    // In-flight deltas keep a full quiet budget after the marker.
+    armQuiet();
+    for (const waiter of toolWaiters.splice(0)) waiter();
+  }
+
+  async function captureBatch(): Promise<void> {
+    try {
+      await textBeforeTools();
+      // A later execute can be queued a few turns after the marker. Each new
+      // call restarts the wait. Cleanup still cancels the run before those
+      // promises reject, so the SDK does not see a tool failure first.
+      let idleTurns = 0;
+      for (
+        let turn = 0;
+        idleTurns < QUEUED_CAPTURE_TURNS &&
+        turn < QUEUED_CAPTURE_LIMIT &&
+        !signal.aborted;
+        turn += 1
+      ) {
+        const seen = calls.length;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        idleTurns = calls.length === seen ? idleTurns + 1 : 0;
+      }
+    } finally {
+      captured();
+    }
   }
 
   async function acquire<T>(
@@ -442,8 +488,12 @@ const workspaceRemoval = {
   retryDelay: 20,
 } as const;
 
-// Captured at load so replacing global setTimeout cannot leave a retry pending.
+// A queued store write can recreate the directory after rm has returned.
+const WORKSPACE_SWEEP_MS = [30, 200, 1_000] as const;
+
+// Captured at load so replacing global timers cannot leave a retry pending.
 const realSetTimeout = setTimeout;
+const realSetImmediate = setImmediate;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -476,6 +526,8 @@ async function removePrivateWorkspace(workspace: string): Promise<void> {
     await deleteWorkspace(workspace);
   } catch (error) {
     errors.push(error);
+  } finally {
+    sweepWorkspaceLater(workspace);
   }
   const transcript = cursorProjectDir(workspace);
   if (transcript && transcript !== workspace) {
@@ -483,6 +535,8 @@ async function removePrivateWorkspace(workspace: string): Promise<void> {
       await deleteWorkspace(transcript);
     } catch (error) {
       errors.push(error);
+    } finally {
+      sweepWorkspaceLater(transcript);
     }
   }
   if (errors.length === 1) throw errors[0];
@@ -494,13 +548,39 @@ async function removePrivateWorkspace(workspace: string): Promise<void> {
   }
 }
 
+function sweepWorkspaceLater(path: string): void {
+  // Unit tests replace timers and rm. A late sweep would land in the next test.
+  if (process.env.VITEST) return;
+  for (const wait of WORKSPACE_SWEEP_MS) {
+    const timer = realSetTimeout(() => {
+      void rm(path, { ...workspaceRemoval }).catch(() => {
+        // A later sweep retries. The caller already finished.
+      });
+    }, wait);
+    timer.unref?.();
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String(error.code)
+        : "";
+    if (code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 async function deleteWorkspace(path: string): Promise<void> {
   const started = Date.now();
   let attempt = 0;
   for (;;) {
     try {
       await rm(path, { ...workspaceRemoval });
-      return;
     } catch (error) {
       const code =
         error && typeof error === "object" && "code" in error
@@ -513,7 +593,20 @@ async function deleteWorkspace(path: string): Promise<void> {
       }
       attempt += 1;
       await delay(Math.min(50 * attempt, 200));
+      continue;
     }
+    // The JSONL store can rewrite state/*.ndjson as soon as rm returns.
+    await new Promise<void>((resolve) => {
+      realSetImmediate(resolve);
+    });
+    if (!(await pathExists(path))) return;
+    if (attempt >= 20 || Date.now() - started >= 1_000) {
+      // A later sweep retries. Failing the answer would drop a finished capture.
+      sweepWorkspaceLater(path);
+      return;
+    }
+    attempt += 1;
+    await delay(Math.min(50 * attempt, 200));
   }
 }
 

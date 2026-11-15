@@ -1,19 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCompletion, type BridgeAgent } from "../src/bridge.js";
 
-const fs = vi.hoisted(() => ({ mkdtemp: vi.fn(), rm: vi.fn() }));
+const fs = vi.hoisted(() => ({
+  mkdtemp: vi.fn(),
+  rm: vi.fn(),
+  stat: vi.fn(),
+}));
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
   mkdtemp: fs.mkdtemp,
   rm: fs.rm,
+  stat: fs.stat,
 }));
+
+const missing = () => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 
 beforeEach(() => {
   vi.useFakeTimers();
   fs.mkdtemp.mockReset().mockResolvedValue("/virtual/private-workspace");
   fs.rm.mockReset().mockResolvedValue(undefined);
+  fs.stat.mockReset().mockRejectedValue(missing());
 });
-afterEach(() => vi.useRealTimers());
+afterEach(async () => {
+  // Removal continues on the real setImmediate captured at import. Fake
+  // timers hide that queue, so restore the real one before draining it.
+  vi.useRealTimers();
+  for (let turn = 0; turn < 10; turn += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+});
 
 const request = {
   apiKey: "test-key",
@@ -139,6 +154,59 @@ describe("completion initialization cleanup", () => {
       // The busy workspace is removed on the second try. The SDK transcript
       // directory is removed once after that.
       await expect(pending).rejects.toThrow(/circular/i);
+      const removal = {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 20,
+      };
+      expect(fs.rm).toHaveBeenNthCalledWith(
+        1,
+        "/virtual/private-workspace",
+        removal,
+      );
+      expect(fs.rm).toHaveBeenNthCalledWith(
+        2,
+        "/virtual/private-workspace",
+        removal,
+      );
+      expect(fs.rm).toHaveBeenNthCalledWith(
+        3,
+        "/virtual/cursor-data/projects/virtual-private-workspace",
+        removal,
+      );
+      expect(createAgent).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (previousDataDir === undefined) delete process.env.CURSOR_DATA_DIR;
+      else process.env.CURSOR_DATA_DIR = previousDataDir;
+    }
+  });
+
+  it("removes a workspace the SDK store recreates after rm returns", async () => {
+    const previousDataDir = process.env.CURSOR_DATA_DIR;
+    process.env.CURSOR_DATA_DIR = "/virtual/cursor-data";
+    let seen = 0;
+    fs.stat.mockImplementation(async (path: string) => {
+      if (path === "/virtual/private-workspace" && seen === 0) {
+        seen += 1;
+        return {};
+      }
+      throw missing();
+    });
+    const parameters: Record<string, unknown> = { type: "object" };
+    parameters.circular = parameters;
+    const createAgent = vi.fn<() => Promise<BridgeAgent>>();
+    try {
+      await expect(
+        runCompletion(
+          {
+            ...request,
+            tools: [{ name: "read", description: "read", parameters }],
+          },
+          { createAgent },
+        ),
+      ).rejects.toThrow(/circular/i);
       const removal = {
         recursive: true,
         force: true,
