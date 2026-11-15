@@ -155,19 +155,38 @@ describe("SDK catalog", () => {
         model({ variants: [variant({ fast: "true" })] }),
       ],
     },
-    {
-      label: "different duplicate SDK ids",
-      items: [model({ displayName: "One" }), model({ displayName: "Two" })],
-    },
   ])(
     "omits the inconsistent model instead of dropping the catalog: $label",
     ({ items }) => {
       const kept = { id: "kept", displayName: "Kept" };
       const catalog = buildCatalog([kept, ...items]);
       expect(catalog.models.map((entry) => entry.id)).toContain("kept");
-      expect(catalog.skipped.join("\n")).toMatch(/collision|duplicate/i);
+      expect(catalog.skipped.join("\n")).toMatch(/collision/i);
     },
   );
+
+  it("omits every copy when one SDK id has conflicting data", () => {
+    const first = model({ displayName: "One" });
+    const catalog = buildCatalog([
+      { id: "kept", displayName: "Kept" },
+      first,
+      model({ displayName: "Two" }),
+      first,
+    ]);
+    expect(catalog.models.map((entry) => entry.id)).toEqual(["kept"]);
+    expect(catalog.skipped).toEqual([
+      "Duplicate SDK model id with different data: model",
+    ]);
+  });
+
+  it("keeps one copy when a repeated SDK id is identical", () => {
+    const catalog = buildCatalog([
+      { id: "model", displayName: "Same" },
+      { id: "model", displayName: "Same" },
+    ]);
+    expect(catalog.models.map((entry) => entry.id)).toEqual(["model"]);
+    expect(catalog.skipped).toEqual([]);
+  });
 
   it.each<{ label: string; item: ModelListItem }>([
     {

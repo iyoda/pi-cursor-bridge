@@ -260,7 +260,6 @@ describe("retryable transport failures", () => {
     "SDK cleanup failed (workspace retained at /tmp/ws): Premature close",
     "SDK cleanup timed out. Premature close",
     "not confirmed cancelled (status: error): Premature close",
-    "maxTokens is not supported by the Cursor SDK; no request was sent. Omit the option to use SDK defaults (without a guaranteed output-token cap).",
     "Cursor completion timed out.",
     "Unauthorized: Premature close",
     "Permission Denied: Premature close",
@@ -271,6 +270,13 @@ describe("retryable transport failures", () => {
   it("keeps cleanup failures non-retryable", () => {
     const message =
       "SDK cleanup failed (workspace retained at /tmp/ws): Premature close";
+    expect(piRetries(markRetryableTransportFailure(message))).toBe(false);
+  });
+
+  it("keeps request-validation failures non-retryable", () => {
+    const message =
+      "Unsupported Cursor SDK request control: custom fetch/headers, temperature or deferred execution. Premature close";
+    expect(markRetryableTransportFailure(message)).toBe(message);
     expect(piRetries(markRetryableTransportFailure(message))).toBe(false);
   });
 

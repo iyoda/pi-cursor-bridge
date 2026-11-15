@@ -5,6 +5,7 @@ import { CatalogRefreshError } from "./catalog.js";
 import { createProviderConfig } from "./provider.js";
 
 export default function cursorSdkExtension(pi: ExtensionAPI): void {
+  let omittedModels = 0;
   pi.registerProvider(
     "cursor-sdk",
     createProviderConfig({
@@ -19,17 +20,25 @@ export default function cursorSdkExtension(pi: ExtensionAPI): void {
         return models;
       },
       login: (options) => Cursor.auth.login(options),
+      noteOmitted(count) {
+        omittedModels = count;
+      },
     }),
   );
   pi.registerCommand("cursor-sdk-refresh", {
     description: "Refresh Cursor SDK models (catalog only; no inference)",
     handler: async (_args, context) => {
+      omittedModels = 0;
       const result = await context.modelRegistry.refresh({
         providers: ["cursor-sdk"],
         allowNetwork: true,
         force: true,
       });
       const error = result.errors.get("cursor-sdk");
+      const omitted =
+        omittedModels === 1
+          ? "1 model omitted."
+          : `${omittedModels} models omitted.`;
       context.ui.notify(
         error
           ? error instanceof CatalogRefreshError
@@ -37,8 +46,10 @@ export default function cursorSdkExtension(pi: ExtensionAPI): void {
             : "Cursor SDK model refresh failed. Check authentication and connectivity."
           : result.aborted
             ? "Cursor SDK model refresh cancelled."
-            : "Cursor SDK model catalog refreshed.",
-        error ? "error" : "info",
+            : omittedModels > 0
+              ? `Cursor SDK model catalog refreshed. ${omitted}`
+              : "Cursor SDK model catalog refreshed.",
+        error ? "error" : omittedModels > 0 ? "warning" : "info",
       );
     },
   });

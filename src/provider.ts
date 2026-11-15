@@ -33,6 +33,8 @@ export interface ProviderDependencies {
   complete(request: CompletionRequest): Promise<CompletionResult>;
   listModels(apiKey: string, signal: AbortSignal): Promise<ModelListItem[]>;
   login(options: SdkLoginOptions): Promise<SdkLoginResult>;
+  /** Called only after a network refresh is published. `count` is omitted SDK models. */
+  noteOmitted?(count: number): void;
 }
 
 function redact(value: unknown, secret: string): string {
@@ -95,12 +97,11 @@ export function createProviderConfig(
       if (!context.allowNetwork) {
         const restored = catalogFromStored(context.stored);
         if (restored) {
-          const published = await context.publish({
+          await context.publish({
             update: () => {
               catalog = restored;
             },
           });
-          if (!published) return catalog.models;
         }
         return catalog.models;
       }
@@ -131,7 +132,7 @@ export function createProviderConfig(
           `Invalid Cursor model catalog: ${detail}`,
         );
       }
-      await context.publish({
+      const published = await context.publish({
         persist: {
           models: next.models,
           checkedAt: Date.now(),
@@ -141,6 +142,7 @@ export function createProviderConfig(
           catalog = next;
         },
       });
+      if (published) deps.noteOmitted?.(next.skipped.length);
       return catalog.models;
     },
     streamSimple(model, context, options = {}) {

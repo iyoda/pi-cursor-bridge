@@ -46,7 +46,7 @@ Team Admin API keys are outside the SDK's supported credentials. Do not paste se
 
 Model discovery fetches the catalog only and does not run inference. At startup the extension registers an `auto` fallback and restores the last catalog Pi stored for this provider, including the SDK parameter selections.
 After discovery, it builds the model and Thinking map from the variants enumerated by the SDK.
-A model that cannot be converted is omitted. The remaining models are published. If that leaves no models, the refresh fails and the previous catalog stays in place.
+A model that cannot be converted is omitted. Copies of one SDK id that disagree are all omitted. The remaining models are published. If that leaves no models, the refresh fails and the previous catalog stays in place. `/cursor-sdk-refresh` reports how many models were omitted.
 The SDK model listing has no AbortSignal API, so cancellation is checked before and after the fetch.
 
 ## Choosing a model, effort, and fast
@@ -69,7 +69,7 @@ cursor-sdk/<model>-1m-fast
 - Rows that distinguish Max Mode use `-max` or `-max-mode`. A `1m` context is distinguished by the context suffix. **Thinking `max` and Max Mode are different settings.**
 - `-fast` is an explicit fast selection. Check Cursor for the pricing and terms of fast and Max Mode.
 - At runtime the extension looks up the SDK selection for the model ID and Thinking level. It does not remap to a nearby effort or synthesize an unpublished parameter combination. Unknown models and unsupported Thinking levels fail before a request is sent. When Pi omits `reasoning`, the `off` route is used if that row advertises one. Otherwise the SDK's default variant is used.
-- Canonical SDK IDs are kept as-is in the internal map. There is no broad compatibility layer for old aliases and no special routing for a private protocol. A row with a colliding ID, an ambiguous mapping, or another unsafe parameterization is omitted. The other rows stay. If none remain, the refresh fails and the previous catalog is retained.
+- Canonical SDK IDs are kept as-is in the internal map. There is no broad compatibility layer for old aliases and no special routing for a private protocol. A row with a colliding ID, an ambiguous mapping, or another unsafe parameterization is omitted. An SDK id whose copies disagree is omitted entirely. The other rows stay. If none remain, the refresh fails and the previous catalog is retained.
 
 After `/cursor-sdk-refresh`, select a row shown by `/model`. A restart restores the stored catalog, so a saved row still resolves before the next fetch. The stored SDK selection is used; the model name alone is not used to guess parameters. `auto` is registered at startup and kept when a stored or fetched catalog omits it. If the catalog includes `auto`, that row is used.
 
@@ -111,7 +111,7 @@ Before a real account, follow the [live validation checklist](docs/live-validati
 
 GitHub Actions runs `npm run check`, an audit of runtime dependencies, and `npm run pack:check` on Node.js 22.19.0 and 24.
 `prepack` runs the full check and build during `npm pack` and `npm publish`. `--ignore-scripts` skips that, so do not use it for distribution.
-If one model cannot be converted, it is omitted and the rest of the catalog is published. If that leaves no models, `/cursor-sdk-refresh` shows the reason and the previous catalog is retained.
+If one model cannot be converted, it is omitted and the rest of the catalog is published. Copies of one SDK id that disagree are all omitted. If that leaves no models, `/cursor-sdk-refresh` shows the reason and the previous catalog is retained. Otherwise it reports how many models were omitted.
 
 ## License
 

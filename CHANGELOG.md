@@ -10,7 +10,7 @@ This is an early development release. It is not published to npm yet.
 - Keep Pi's tool execution, permissions, and history. SDK custom tools are used only to capture requests.
 - Choose the model, fast, and Max Mode with `/model`, and choose effort with Pi's Thinking controls.
 - Text only. Images, custom fetch, temperature, and deferred execution are rejected before a request is sent. A request `maxTokens` is not forwarded and does not reject the request, because the SDK has no output cap.
-- If one model cannot be converted, omit that model and publish the rest. If none remain, show the reason and keep the previous catalog.
+- If one model cannot be converted, omit that model and publish the rest. If none remain, show the reason and keep the previous catalog. When some models are omitted, `/cursor-sdk-refresh` reports how many. An SDK id whose copies disagree is omitted entirely.
 - Restore the stored catalog, including SDK selections, before the next fetch so a saved model still resolves. When Pi omits `reasoning`, use the `off` route when that row advertises one, and otherwise the SDK default variant.
 - Put the short harness notes after the JSON transcript, so they are not the opening the model treats as the request.
 - Ship the changelog, code of conduct, contributing guide, and vulnerability contact with the package.

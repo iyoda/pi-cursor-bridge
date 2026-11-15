@@ -665,6 +665,7 @@ describe("Pi provider stream", () => {
 
   it("keeps valid models when one SDK model cannot be converted", async () => {
     const deps = dependencies();
+    deps.noteOmitted = vi.fn();
     vi.mocked(deps.listModels).mockResolvedValue([
       { id: "good", displayName: "Good" },
       {
@@ -674,16 +675,28 @@ describe("Pi provider stream", () => {
       },
     ]);
     const config = createProviderConfig(deps);
-    const models = await config.refreshModels!({
-      credential: { type: "api_key", key: "test-key" },
+    const refresh = {
+      credential: { type: "api_key" as const, key: "test-key" },
       allowNetwork: true,
       signal: new AbortController().signal,
+    };
+    const withheld = await config.refreshModels!({
+      ...refresh,
+      publish: async () => false,
+    });
+    expect(withheld.map((item) => item.id)).toEqual(["auto"]);
+    expect(deps.noteOmitted).not.toHaveBeenCalled();
+
+    const models = await config.refreshModels!({
+      ...refresh,
       publish: async ({ update }) => {
         update?.();
         return true;
       },
     });
     expect(models.map((item) => item.id)).toEqual(["good", "auto"]);
+    expect(deps.noteOmitted).toHaveBeenCalledTimes(1);
+    expect(deps.noteOmitted).toHaveBeenCalledWith(1);
     const events = await collect(
       stream(config, {}, { model: { ...model, id: "good" } }),
     );

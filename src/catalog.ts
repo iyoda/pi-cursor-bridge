@@ -189,19 +189,27 @@ function commitItem(
 export function buildCatalog(items: ModelListItem[]): Catalog {
   const catalog: Catalog = { models: [], entries: new Map(), skipped: [] };
   const sdkIds = new Set(items.map((item) => item.id));
-  const seenItems = new Map<string, string>();
+  // The listing does not say which copy of a repeated id is current. Keep one
+  // copy only when every copy matches. Otherwise omit that id entirely.
+  const accepted = new Map<string, ModelListItem>();
+  const rejected = new Set<string>();
   for (const item of items) {
+    if (rejected.has(item.id)) continue;
+    const previous = accepted.get(item.id);
+    if (!previous) {
+      accepted.set(item.id, item);
+      continue;
+    }
+    if (JSON.stringify(previous) !== JSON.stringify(item)) {
+      accepted.delete(item.id);
+      rejected.add(item.id);
+      catalog.skipped.push(
+        `Duplicate SDK model id with different data: ${item.id}`,
+      );
+    }
+  }
+  for (const item of accepted.values()) {
     try {
-      const signature = JSON.stringify(item);
-      if (seenItems.has(item.id)) {
-        if (seenItems.get(item.id) !== signature) {
-          catalog.skipped.push(
-            `Duplicate SDK model id with different data: ${item.id}`,
-          );
-        }
-        continue;
-      }
-      seenItems.set(item.id, signature);
       commitItem(catalog, item, sdkIds);
     } catch (error) {
       catalog.skipped.push(
