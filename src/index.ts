@@ -6,6 +6,7 @@ import { createProviderConfig } from "./provider.js";
 
 export default function cursorSdkExtension(pi: ExtensionAPI): void {
   let omittedModels = 0;
+  let omittedDetails: readonly string[] = [];
   pi.registerProvider(
     "cursor-sdk",
     createProviderConfig({
@@ -20,8 +21,9 @@ export default function cursorSdkExtension(pi: ExtensionAPI): void {
         return models;
       },
       login: (options) => Cursor.auth.login(options),
-      noteOmitted(count) {
+      noteOmitted(count, details) {
         omittedModels = count;
+        omittedDetails = details;
       },
     }),
   );
@@ -29,16 +31,20 @@ export default function cursorSdkExtension(pi: ExtensionAPI): void {
     description: "Refresh Cursor SDK models (catalog only; no inference)",
     handler: async (_args, context) => {
       omittedModels = 0;
+      omittedDetails = [];
       const result = await context.modelRegistry.refresh({
         providers: ["cursor-sdk"],
         allowNetwork: true,
         force: true,
       });
       const error = result.errors.get("cursor-sdk");
-      const omitted =
-        omittedModels === 1
-          ? "1 model omitted."
-          : `${omittedModels} models omitted.`;
+      const omitted = `${omittedModels} SDK model ${omittedModels === 1 ? "ID" : "IDs"} omitted.`;
+      const remaining = omittedModels - omittedDetails.length;
+      const preview = [
+        omitted,
+        ...omittedDetails,
+        ...(remaining > 0 ? [`${remaining} more omitted.`] : []),
+      ].join(" ");
       context.ui.notify(
         error
           ? error instanceof CatalogRefreshError
@@ -47,9 +53,13 @@ export default function cursorSdkExtension(pi: ExtensionAPI): void {
           : result.aborted
             ? "Cursor SDK model refresh cancelled."
             : omittedModels > 0
-              ? `Cursor SDK model catalog refreshed. ${omitted}`
+              ? `Cursor SDK model catalog refreshed. ${preview}`
               : "Cursor SDK model catalog refreshed.",
-        error ? "error" : omittedModels > 0 ? "warning" : "info",
+        error
+          ? "error"
+          : !result.aborted && omittedModels > 0
+            ? "warning"
+            : "info",
       );
     },
   });

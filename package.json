@@ -56,7 +56,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run format:check && npm test && npm run build",
-    "pack:check": "rm -f ./*.tgz && npm pack && node scripts/check-pack.mjs"
+    "pack:check": "rm -f ./*.tgz && npm pack && node scripts/check-pack.mjs",
+    "install:check": "node scripts/check-install.mjs"
   },
   "dependencies": {
     "@cursor/sdk": "1.3.1"

@@ -48,8 +48,17 @@ describe("Pi extension registration", () => {
     vi.spyOn(Cursor.models, "list").mockResolvedValue([
       { id: "good", displayName: "Good" },
       {
-        id: "bad",
+        id: "bad-test-key\u001b\nmodel",
         displayName: "Bad",
+        parameters: [{ id: "effort", values: [{ value: "high" }] }],
+      },
+      { id: "second", displayName: "One" },
+      { id: "second", displayName: "Two" },
+      { id: "third", displayName: "One" },
+      { id: "third", displayName: "Two" },
+      {
+        id: "fourth",
+        displayName: "Fourth",
         parameters: [{ id: "effort", values: [{ value: "high" }] }],
       },
     ]);
@@ -82,9 +91,22 @@ describe("Pi extension registration", () => {
       ui: { notify },
     } as unknown as Parameters<typeof handler>[1]);
     expect(notify).toHaveBeenCalledWith(
-      "Cursor SDK model catalog refreshed. 1 model omitted.",
+      expect.stringContaining("4 SDK model IDs omitted."),
       "warning",
     );
+    const message = notify.mock.calls[0]![0] as string;
+    expect(message).toContain(
+      "Parameterized model bad-[REDACTED]  model has no variants",
+    );
+    expect(message).toContain(
+      "Duplicate SDK model id with different data: second",
+    );
+    expect(message).toContain(
+      "Duplicate SDK model id with different data: third",
+    );
+    expect(message).toContain("1 more omitted");
+    expect(message).not.toContain("fourth");
+    expect(message).not.toMatch(/test-key|\u001b|\n/);
 
     notify.mockClear();
     await handler("", {

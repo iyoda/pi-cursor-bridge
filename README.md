@@ -10,7 +10,7 @@ The Cursor SDK is an agent SDK, not a model-inference API. This extension is a t
 ## Requirements and startup
 
 - Node.js 22.19 or later
-- Pi 1.5.2, the version used for development and validation. Other versions are unverified
+- Pi 1.5.2 is the development baseline and has live inference coverage. Pi 1.6.0 passed the offline package install, model discovery, and removal check; live inference on 1.6.0 and other Pi versions are unverified.
 - A Cursor SDK user or service-account API key
 
 Before publication, build the checked-out directory and load the extension explicitly.
@@ -22,8 +22,15 @@ pi --no-extensions -e "$PWD/dist/index.js" --model cursor-sdk/auto
 ```
 
 `--no-extensions` loads this extension without loading others.
-Omit it when using the extension alongside others. The package is not published to npm yet, so `pi install` is not available.
-Leave Pi's global settings unchanged and start with an explicit `-e` load.
+Omit it when using the extension alongside others. An explicit `-e` load does not change Pi's package settings. No npm publication is required to install the built checkout persistently:
+
+```bash
+pi install "$PWD"
+# To unregister this checkout later, from the same directory:
+pi remove "$PWD"
+```
+
+After `pi install`, run Pi normally, without `--no-extensions`. Keep the checkout at the same path and rebuild it after pulling updates.
 `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` are provided by Pi. This package does not bundle them, and their peer range is `*`.
 
 ## Authentication
@@ -46,7 +53,7 @@ Team Admin API keys are outside the SDK's supported credentials. Do not paste se
 
 Model discovery fetches the catalog only and does not run inference. At startup the extension registers an `auto` fallback and restores the last catalog Pi stored for this provider, including the SDK parameter selections.
 After discovery, it builds the model and Thinking map from the variants enumerated by the SDK.
-A model that cannot be converted is omitted. Copies of one SDK id that disagree are all omitted. The remaining models are published. If that leaves no models, the refresh fails and the previous catalog stays in place. `/cursor-sdk-refresh` reports how many models were omitted.
+A model that cannot be converted is omitted. Copies of one SDK id that disagree are all omitted. The remaining models are published. If that leaves no models, the refresh fails and the previous catalog stays in place. `/cursor-sdk-refresh` reports the number of omitted SDK model IDs (not `/model` rows), shows up to three IDs with reasons, and reports how many more were omitted. Startup discovery does not show this notification.
 The SDK model listing has no AbortSignal API, so cancellation is checked before and after the fetch.
 
 ## Choosing a model, effort, and fast
@@ -71,7 +78,7 @@ cursor-sdk/<model>-1m-fast
 - At runtime the extension looks up the SDK selection for the model ID and Thinking level. It does not remap to a nearby effort or synthesize an unpublished parameter combination. Unknown models and unsupported Thinking levels fail before a request is sent. When Pi omits `reasoning`, the `off` route is used if that row advertises one. Otherwise the SDK's default variant is used.
 - Canonical SDK IDs are kept as-is in the internal map. There is no broad compatibility layer for old aliases and no special routing for a private protocol. A row with a colliding ID, an ambiguous mapping, or another unsafe parameterization is omitted. An SDK id whose copies disagree is omitted entirely. The other rows stay. If none remain, the refresh fails and the previous catalog is retained.
 
-After `/cursor-sdk-refresh`, select a row shown by `/model`. A restart restores the stored catalog, so a saved row still resolves before the next fetch. The stored SDK selection is used; the model name alone is not used to guess parameters. `auto` is registered at startup and kept when a stored or fetched catalog omits it. If the catalog includes `auto`, that row is used.
+After `/cursor-sdk-refresh`, select a row shown by `/model`. A restart restores the stored catalog, so a saved row still resolves before the next fetch. The stored SDK selection is used; the model name alone is not used to guess parameters. `auto` is registered at startup. If the SDK listing has no `auto`, the fallback is kept. If the SDK lists `auto`, only validated rows are used; a rejected entry is not restored as a fallback.
 
 ## Implementation
 
@@ -109,9 +116,8 @@ Tests replace the SDK boundary with fakes and do not perform billing, login, or 
 Before a real account, follow the [live validation checklist](docs/live-validation.md).
 `examples/smoke-tools.ts` is for explicit loading only. Normal extension loading and CI do not load it.
 
-GitHub Actions runs `npm run check`, an audit of runtime dependencies, and `npm run pack:check` on Node.js 22.19.0 and 24.
+GitHub Actions checks Node.js 22.19.0, 24, and 26. It runs the tests, audits runtime dependencies, checks the tarball, and verifies that Pi can install, discover, and remove the packed extension without inference.
 `prepack` runs the full check and build during `npm pack` and `npm publish`. `--ignore-scripts` skips that, so do not use it for distribution.
-If one model cannot be converted, it is omitted and the rest of the catalog is published. Copies of one SDK id that disagree are all omitted. If that leaves no models, `/cursor-sdk-refresh` shows the reason and the previous catalog is retained. Otherwise it reports how many models were omitted.
 
 ## License
 

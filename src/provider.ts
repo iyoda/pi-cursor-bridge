@@ -33,12 +33,21 @@ export interface ProviderDependencies {
   complete(request: CompletionRequest): Promise<CompletionResult>;
   listModels(apiKey: string, signal: AbortSignal): Promise<ModelListItem[]>;
   login(options: SdkLoginOptions): Promise<SdkLoginResult>;
-  /** Called only after a network refresh is published. `count` is omitted SDK models. */
-  noteOmitted?(count: number): void;
+  /** Safe preview of omitted SDK IDs, reported only after publication. */
+  noteOmitted?(count: number, details: readonly string[]): void;
 }
 
 function redact(value: unknown, secret: string): string {
   return formatFailure(value).split(secret).join("[REDACTED]");
+}
+
+function catalogDiagnostic(value: unknown, key: string, limit: number): string {
+  return redact(value, key)
+    .replace(
+      /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu,
+      " ",
+    )
+    .slice(0, limit);
 }
 
 function failureCode(error: unknown): string | undefined {
@@ -131,9 +140,7 @@ export function createProviderConfig(
         ensureAuto(next);
       } catch (error) {
         // Only expose our catalog validation errors, never raw SDK/network errors.
-        const detail = redact(error, apiKey)
-          .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-          .slice(0, 1000);
+        const detail = catalogDiagnostic(error, apiKey, 1000);
         throw new CatalogRefreshError(
           `Invalid Cursor model catalog: ${detail}`,
         );
@@ -149,7 +156,14 @@ export function createProviderConfig(
           catalog = next;
         },
       });
-      if (published) deps.noteOmitted?.(next.skipped.length);
+      if (published) {
+        deps.noteOmitted?.(
+          next.skipped.length,
+          next.skipped
+            .slice(0, 3)
+            .map((reason) => catalogDiagnostic(reason, apiKey, 160)),
+        );
+      }
       return catalog.models;
     },
     streamSimple(model, context, options = {}) {

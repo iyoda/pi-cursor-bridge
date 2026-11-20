@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["22.19.0", "24"]
+        node: ["22.19.0", "24", "26"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,3 +30,5 @@ jobs:
       - run: npm audit --omit=dev
       # prepack runs the full check again, then pack:check verifies the tarball.
       - run: npm run pack:check
+      - run: npm run install:check -- ./atikoro-pi-cursor-sdk-*.tgz 1.5.2
+      - run: npm run install:check -- ./atikoro-pi-cursor-sdk-*.tgz 1.6.0

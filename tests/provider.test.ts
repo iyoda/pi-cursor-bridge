@@ -747,7 +747,9 @@ describe("Pi provider stream", () => {
     });
     expect(models.map((item) => item.id)).toEqual(["good", "auto"]);
     expect(deps.noteOmitted).toHaveBeenCalledTimes(1);
-    expect(deps.noteOmitted).toHaveBeenCalledWith(1);
+    expect(deps.noteOmitted).toHaveBeenCalledWith(1, [
+      "Parameterized model bad has no variants",
+    ]);
     const events = await collect(
       stream(config, {}, { model: { ...model, id: "good" } }),
     );
