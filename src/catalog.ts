@@ -28,6 +28,8 @@ const blankThinkingLevels = {
 } satisfies Record<ModelThinkingLevel, null>;
 const levels = Object.keys(blankThinkingLevels) as ModelThinkingLevel[];
 const effortIds = ["effort", "reasoning_effort", "reasoning"];
+// SDK presence is independent of whether a bare auto route was accepted.
+const autoListed = new WeakSet<Catalog>();
 
 function blankThinkingMap(): Record<ModelThinkingLevel, string | null> {
   return { ...blankThinkingLevels };
@@ -52,11 +54,10 @@ function valueOf(
   return variant?.params.find((param) => param.id === id)?.value;
 }
 
-function commitItem(
-  catalog: Catalog,
+function buildItem(
   item: ModelListItem,
   sdkIds: Set<string>,
-): void {
+): Pick<Catalog, "models" | "entries"> {
   if (item.parameters?.length && !item.variants?.length) {
     throw new Error(`Parameterized model ${item.id} has no variants`);
   }
@@ -152,11 +153,7 @@ function commitItem(
       maxSuffix +
       (thinking ? "-thinking" : "") +
       (fast ? "-fast" : "");
-    if (
-      catalog.entries.has(id) ||
-      entries.has(id) ||
-      (id !== item.id && sdkIds.has(id))
-    ) {
+    if (entries.has(id) || (id !== item.id && sdkIds.has(id))) {
       throw new Error(`Model ID collision: ${id} (SDK model ${item.id})`);
     }
     const name = [
@@ -182,13 +179,13 @@ function commitItem(
     });
     entries.set(id, entry);
   }
-  catalog.models.push(...models);
-  for (const [id, entry] of entries) catalog.entries.set(id, entry);
+  return { models, entries };
 }
 
 export function buildCatalog(items: ModelListItem[]): Catalog {
   const catalog: Catalog = { models: [], entries: new Map(), skipped: [] };
   const sdkIds = new Set(items.map((item) => item.id));
+  if (sdkIds.has("auto")) autoListed.add(catalog);
   // The listing does not say which copy of a repeated id is current. Keep one
   // copy only when every copy matches. Otherwise omit that id entirely.
   const accepted = new Map<string, ModelListItem>();
@@ -208,20 +205,40 @@ export function buildCatalog(items: ModelListItem[]): Catalog {
       );
     }
   }
+  const candidates = new Map<string, ReturnType<typeof buildItem>>();
+  const claimed = new Set<string>();
+  const collisions = new Set<string>();
   for (const item of accepted.values()) {
     try {
-      commitItem(catalog, item, sdkIds);
+      const candidate = buildItem(item, sdkIds);
+      candidates.set(item.id, candidate);
+      for (const id of candidate.entries.keys()) {
+        if (claimed.has(id)) collisions.add(id);
+        claimed.add(id);
+      }
     } catch (error) {
       catalog.skipped.push(
         error instanceof Error ? error.message : String(error),
       );
     }
   }
+  // Check all claims before publishing routes; the first claim is not safer.
+  for (const [sdkId, { models, entries }] of candidates) {
+    const collision = [...entries.keys()].find((id) => collisions.has(id));
+    if (collision !== undefined) {
+      catalog.skipped.push(
+        `Model ID collision: ${collision} (SDK model ${sdkId})`,
+      );
+      continue;
+    }
+    catalog.models.push(...models);
+    for (const [id, entry] of entries) catalog.entries.set(id, entry);
+  }
   return catalog;
 }
 
 export function ensureAuto(catalog: Catalog): Catalog {
-  if (catalog.entries.has("auto")) return catalog;
+  if (autoListed.has(catalog) || catalog.entries.has("auto")) return catalog;
   const fallback = buildCatalog([
     { id: "auto", displayName: "Cursor Auto (SDK fallback)" },
   ]);
@@ -305,6 +322,7 @@ export function catalogFromStored(stored: unknown): Catalog | undefined {
   const record = stored as {
     models?: unknown;
     cursorSdkSelections?: unknown;
+    cursorSdkAutoOmitted?: unknown;
   };
   if (
     !Array.isArray(record.models) ||
@@ -315,7 +333,17 @@ export function catalogFromStored(stored: unknown): Catalog | undefined {
   }
   const selections = record.cursorSdkSelections as Record<string, unknown>;
   const catalog: Catalog = { models: [], entries: new Map(), skipped: [] };
+  // Preserve a saved omission and don't treat a damaged auto row as absence.
+  if (
+    record.cursorSdkAutoOmitted === true ||
+    Object.hasOwn(selections, "auto")
+  ) {
+    autoListed.add(catalog);
+  }
   for (const model of record.models) {
+    if (model && typeof model === "object" && model.id === "auto") {
+      autoListed.add(catalog);
+    }
     if (!isPiModel(model)) continue;
     const entry = selections[model.id];
     if (!isCatalogEntry(entry)) continue;

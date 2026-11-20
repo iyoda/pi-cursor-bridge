@@ -110,7 +110,13 @@ export function createProviderConfig(
         credential?.type === "oauth" ? credential.access : credential?.key;
       if (!apiKey) return catalog.models;
       context.signal.throwIfAborted();
-      const items = await deps.listModels(apiKey, context.signal);
+      let items: ModelListItem[];
+      try {
+        items = await deps.listModels(apiKey, context.signal);
+      } catch {
+        context.signal.throwIfAborted();
+        throw new Error("Cursor SDK model listing failed.");
+      }
       context.signal.throwIfAborted();
       let next: ReturnType<typeof buildCatalog>;
       try {
@@ -137,6 +143,7 @@ export function createProviderConfig(
           models: next.models,
           checkedAt: Date.now(),
           cursorSdkSelections: serializeSelections(next),
+          ...(!next.entries.has("auto") ? { cursorSdkAutoOmitted: true } : {}),
         } as unknown as ModelsStoreEntry,
         update: () => {
           catalog = next;
@@ -231,6 +238,7 @@ export function createProviderConfig(
       };
       void (async () => {
         let clearDeadline: (() => void) | undefined;
+        let acceptingDeltas = true;
         try {
           options.signal?.throwIfAborted();
           const timeoutMs = options.timeoutMs ?? DEFAULT_COMPLETION_TIMEOUT_MS;
@@ -302,12 +310,14 @@ export function createProviderConfig(
               deadline.clear();
             },
             onDelta: async ({ update }) => {
+              if (!acceptingDeltas) return;
               signal.throwIfAborted();
               if (!idleStopped) deadline.refresh();
               await untilAborted(
                 Promise.resolve(options.onProviderStreamEvent?.(update, model)),
                 signal,
               );
+              if (!acceptingDeltas) return;
               signal.throwIfAborted();
               if (update.type === "text-delta") delta("text", update.text);
               if (update.type === "thinking-delta")
@@ -315,6 +325,7 @@ export function createProviderConfig(
               if (update.type === "thinking-completed") endBlock();
             },
           });
+          acceptingDeltas = false;
           signal.throwIfAborted();
           const fullText = result.text ?? "";
           const streamed = output.content
@@ -375,6 +386,7 @@ export function createProviderConfig(
             message: output,
           });
         } catch (error) {
+          acceptingDeltas = false;
           output.stopReason = options.signal?.aborted ? "aborted" : "error";
           const message = redact(error, apiKey);
           output.errorMessage =

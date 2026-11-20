@@ -663,6 +663,57 @@ describe("Pi provider stream", () => {
     expect(listed[0]).toMatchObject({ name: "From SDK", reasoning: false });
   });
 
+  it("does not restore a rejected auto after publishing and restarting", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.listModels).mockResolvedValue([
+      { id: "good", displayName: "Good" },
+      { id: "auto", displayName: "First" },
+      { id: "auto", displayName: "Second" },
+    ]);
+    const signal = new AbortController().signal;
+    const config = createProviderConfig(deps);
+    const publish = vi.fn<
+      Parameters<NonNullable<typeof config.refreshModels>>[0]["publish"]
+    >(async ({ update }) => {
+      update?.();
+      return true;
+    });
+    const models = await config.refreshModels!({
+      credential: { type: "api_key", key: "test-key" },
+      allowNetwork: true,
+      signal,
+      publish,
+    });
+    expect(models.map(({ id }) => id)).toEqual(["good"]);
+    const restored = await createProviderConfig(deps).refreshModels!({
+      allowNetwork: false,
+      stored: publish.mock.calls[0]![0].persist ?? undefined,
+      signal,
+      publish,
+    });
+    expect(restored.map(({ id }) => id)).toEqual(["good"]);
+  });
+
+  it("isolates a model listing failure from SDK exception details", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.listModels).mockRejectedValue(
+      new Error("test-key", { cause: { key: "test-key" } }),
+    );
+    const publish = vi.fn(async () => true);
+    const pending = createProviderConfig(deps).refreshModels!({
+      credential: { type: "api_key", key: "test-key" },
+      allowNetwork: true,
+      signal: new AbortController().signal,
+      publish,
+    });
+    const failure = await pending.catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      message: "Cursor SDK model listing failed.",
+    });
+    expect(failure).not.toHaveProperty("cause");
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it("keeps valid models when one SDK model cannot be converted", async () => {
     const deps = dependencies();
     deps.noteOmitted = vi.fn();
@@ -937,6 +988,46 @@ describe("Pi provider stream", () => {
       expect(events).toHaveLength(2);
     },
   );
+
+  it("rejects an invalid idle limit without asking Pi to retry", async () => {
+    const deps = dependencies();
+    const result = await stream(deps, { timeoutMs: 0 }).result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("integers");
+    expect(isRetryableAssistantError(result)).toBe(false);
+    expect(deps.complete).not.toHaveBeenCalled();
+  });
+
+  it("keeps a finalized tool response unchanged when a held hook resumes", async () => {
+    const deps = dependencies();
+    let releaseHook!: () => void;
+    const hook = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    let pendingDelta: Promise<void> | undefined;
+    vi.mocked(deps.complete).mockImplementation(async (request) => {
+      pendingDelta = Promise.resolve(
+        request.onDelta?.({
+          update: { type: "text-delta", text: "late" },
+        }),
+      );
+      request.releaseIdle?.();
+      return { calls: [{ id: "tool-1", name: "read", arguments: {} }] };
+    });
+    const response = stream(deps, {
+      onProviderStreamEvent: () => hook,
+    });
+    const events = await collect(response);
+    const result = await response.result();
+    const before = structuredClone(result);
+    releaseHook();
+    await pendingDelta;
+    expect(events.at(-1)?.type).toBe("done");
+    expect(before.content).toEqual([
+      { type: "toolCall", id: "tool-1", name: "read", arguments: {} },
+    ]);
+    expect(result).toEqual(before);
+  });
 
   it("returns captured SDK requests as native Pi tool calls", async () => {
     const deps = dependencies();

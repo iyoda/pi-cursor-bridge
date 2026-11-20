@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { accessSync, constants, statSync } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -187,7 +188,7 @@ export async function runCompletion(
               return Promise.reject(new Error("Cursor run is closed."));
             const toolCallId = context.toolCallId;
             calls.push({
-              id: toolCallId ?? `pi-sdk-${calls.length}`,
+              id: toolCallId ?? `pi-sdk-${randomUUID()}`,
               name: tool.name,
               arguments: args,
             });
@@ -476,12 +477,14 @@ export async function runCompletion(
       }
     }
     if (errors.length) {
-      const retained = cancelFailed
-        ? ` (workspace retained at ${workspace})`
-        : "";
+      // Pi classifies retries from the public message. Keep paths and SDK
+      // error details in structured diagnostics, not in that message.
       throw new AggregateError(
         errors,
-        `SDK cleanup failed${retained}: ${errors.map(String).join("; ")}`,
+        cancelFailed
+          ? "SDK cleanup failed (workspace retained)."
+          : "SDK cleanup failed.",
+        cancelFailed ? { cause: { retainedWorkspace: workspace } } : undefined,
       );
     }
   }

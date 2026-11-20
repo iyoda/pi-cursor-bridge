@@ -2,6 +2,11 @@ import { access, rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentOptions, SDKAgent } from "@cursor/sdk";
 import {
+  isRetryableAssistantError,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
+import { formatFailure, markRetryableTransportFailure } from "../src/async.js";
+import {
   runCompletion,
   type BridgeAgent,
   type BridgeRun,
@@ -433,28 +438,67 @@ describe("official SDK completion", () => {
     expect(h.dispose).toHaveBeenCalledTimes(1);
   });
 
-  it("does not return executable calls when cancellation fails", async () => {
-    const h = harness();
-    h.send.mockImplementation(async (_message, opts) => {
-      void Promise.resolve(
-        h.options.local!.customTools!.pi_tool_0!.execute({}, {}),
-      ).catch(() => {});
-      await opts?.onDelta?.({ update: toolCallStarted() });
-      return h.run;
-    });
-    vi.mocked(h.run.cancel).mockRejectedValue(new Error("cancel failed"));
-    await expect(
-      runCompletion(
+  it.each([
+    ["cancel rejection", "cancel failed: timeout at /synthetic/private"],
+    ["cancel deadline", "SDK cleanup timed out."],
+    [
+      "unconfirmed cancel with disposal failure",
+      "network error during disposal",
+    ],
+  ])(
+    "reports %s as a non-retryable cleanup failure",
+    async (scenario, detail) => {
+      const h = harness();
+      h.send.mockImplementation(async (_message, opts) => {
+        void Promise.resolve(
+          h.options.local!.customTools!.pi_tool_0!.execute({}, {}),
+        ).catch(() => {});
+        await opts?.onDelta?.({ update: toolCallStarted() });
+        return h.run;
+      });
+      vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+      if (scenario === "cancel rejection") {
+        vi.mocked(h.run.cancel).mockRejectedValue(new Error(detail));
+      } else if (scenario === "cancel deadline") {
+        vi.mocked(h.run.cancel).mockImplementation(() => new Promise(() => {}));
+      } else {
+        vi.mocked(h.run.cancel).mockResolvedValue(undefined);
+        h.dispose.mockRejectedValue(new Error(detail));
+      }
+      const failure: unknown = await runCompletion(
         {
           ...request,
+          cleanupTimeoutMs: 20,
           tools: [{ name: "bash", description: "shell", parameters: {} }],
         },
         h,
-      ),
-    ).rejects.toThrow(/cancel failed/);
-    expect(h.dispose).toHaveBeenCalledTimes(1);
-    await expect(access(h.options.local!.cwd!)).resolves.toBeUndefined();
-  });
+      ).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(AggregateError);
+      const error = failure as AggregateError;
+      const errorMessage = markRetryableTransportFailure(formatFailure(error));
+      expect(
+        isRetryableAssistantError({
+          stopReason: "error",
+          errorMessage,
+        } as AssistantMessage),
+      ).toBe(false);
+      const workspace = h.options.local!.cwd!;
+      expect(errorMessage).not.toContain(workspace);
+      expect(errorMessage).not.toContain(detail);
+      expect(error.errors).toEqual([
+        expect.objectContaining({ message: detail }),
+      ]);
+      expect(h.dispose).toHaveBeenCalledTimes(1);
+      if (scenario === "unconfirmed cancel with disposal failure") {
+        await expect(access(workspace)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } else {
+        expect(error.cause).toEqual({ retainedWorkspace: workspace });
+        await expect(access(workspace)).resolves.toBeUndefined();
+      }
+    },
+  );
 
   it("keeps cleanup failure on the run error when cancellation also fails", async () => {
     const h = harness();
@@ -472,8 +516,10 @@ describe("official SDK completion", () => {
     expect(error.message).toBe("Premature close");
     expect(error.cause).toBeInstanceOf(AggregateError);
     const cleanup = error.cause as AggregateError;
-    expect(cleanup.message).toContain(`workspace retained at ${workspace}`);
-    expect(cleanup.message).toContain("cancel failed");
+    expect(cleanup.cause).toEqual({ retainedWorkspace: workspace });
+    expect(cleanup.errors).toEqual([
+      expect.objectContaining({ message: "cancel failed" }),
+    ]);
     expect(h.run.cancel).toHaveBeenCalledOnce();
     expect(h.dispose).toHaveBeenCalledTimes(1);
     await expect(access(workspace)).resolves.toBeUndefined();
@@ -514,48 +560,85 @@ describe("official SDK completion", () => {
     ).resolves.toMatchObject({ calls: [], text: "hello", usage });
     await expect(access(h.options.local!.cwd!)).rejects.toThrow();
   });
-  it("captures tools without executing them and cancels before returning to Pi", async () => {
-    const h = harness();
-    const order: string[] = [];
-    h.send.mockImplementation(async (_message, opts) => {
-      const callback = h.options.local!.customTools!.pi_tool_0!;
-      void Promise.resolve(
-        callback.execute({ path: "file.ts" }, { toolCallId: "sdk-call" }),
-      ).catch(() => {});
-      await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
-      return h.run;
-    });
-    vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
-    const cancel = vi.mocked(h.run.cancel).getMockImplementation()!;
-    vi.mocked(h.run.cancel).mockImplementation(async () => {
-      order.push("cancel");
-      await cancel();
-    });
-    h.dispose.mockImplementation(async () => {
-      order.push("dispose");
-    });
-    const result = await runCompletion(
-      {
-        ...request,
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            parameters: { type: "object" },
-          },
-        ],
-      },
-      h,
-    );
-    order.push("return");
-    expect(h.options.tools).toEqual(["mcp"]);
-    expect(h.options.local!.customTools!.pi_tool_0!.inputSchema).toEqual({
-      type: "object",
-    });
-    expect(result.calls).toEqual([
-      { id: "sdk-call", name: "read", arguments: { path: "file.ts" } },
-    ]);
-    expect(order).toEqual(["cancel", "dispose", "return"]);
+  it.each([false, true])(
+    "hands off after confirmed cancel (disposal fails: %s)",
+    async (disposalFails) => {
+      const h = harness();
+      const order: string[] = [];
+      h.send.mockImplementation(async (_message, opts) => {
+        const callback = h.options.local!.customTools!.pi_tool_0!;
+        void Promise.resolve(
+          callback.execute({ path: "file.ts" }, { toolCallId: "sdk-call" }),
+        ).catch(() => {});
+        await opts?.onDelta?.({ update: toolCallStarted("sdk-call") });
+        return h.run;
+      });
+      vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+      const cancel = vi.mocked(h.run.cancel).getMockImplementation()!;
+      vi.mocked(h.run.cancel).mockImplementation(async () => {
+        order.push("cancel");
+        await cancel();
+      });
+      h.dispose.mockImplementation(async () => {
+        order.push("dispose");
+        if (disposalFails) throw new Error("network error during disposal");
+      });
+      const result = await runCompletion(
+        {
+          ...request,
+          tools: [
+            {
+              name: "read",
+              description: "Read file",
+              parameters: { type: "object" },
+            },
+          ],
+        },
+        h,
+      );
+      order.push("return");
+      expect(h.options.tools).toEqual(["mcp"]);
+      expect(h.options.local!.customTools!.pi_tool_0!.inputSchema).toEqual({
+        type: "object",
+      });
+      expect(result.calls).toEqual([
+        { id: "sdk-call", name: "read", arguments: { path: "file.ts" } },
+      ]);
+      expect(order).toEqual(["cancel", "dispose", "return"]);
+      await expect(access(h.options.local!.cwd!)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+  it("assigns distinct fallback IDs across completions without changing SDK IDs", async () => {
+    async function complete() {
+      const h = harness();
+      h.send.mockImplementation(async (_message, opts) => {
+        const tool = h.options.local!.customTools!.pi_tool_0!;
+        for (const context of [{}, { toolCallId: "sdk-call" }, {}]) {
+          void Promise.resolve(tool.execute({}, context)).catch(() => {});
+        }
+        await opts?.onDelta?.({ update: toolCallStarted() });
+        return h.run;
+      });
+      vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
+      const result = await runCompletion(
+        {
+          ...request,
+          tools: [{ name: "echo", description: "echo", parameters: {} }],
+        },
+        h,
+      );
+      return result.calls.map((call) => call.id);
+    }
+
+    const first = await complete();
+    const second = await complete();
+    expect(first).toHaveLength(3);
+    expect(second).toHaveLength(3);
+    expect(first[1]).toBe("sdk-call");
+    expect(second[1]).toBe("sdk-call");
+    expect(new Set([...first, ...second])).toHaveProperty("size", 5);
   });
   it("returns all synchronously captured calls only after cleanup", async () => {
     const h = harness();

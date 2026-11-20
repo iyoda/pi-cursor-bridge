@@ -80,11 +80,11 @@ After `/cursor-sdk-refresh`, select a row shown by `/model`. A restart restores 
 3. Send the history to a new SDK Agent as a user message.
 4. Disable built-in tools and subagents, and expose only Pi's current tools as capture-only MCP custom tools.
 5. When the SDK requests a tool, capture the request and do not execute it.
-6. Finish cancelling the Run and disposing of the Agent before returning Pi's native tool call.
+6. Confirm that the Run was cancelled and attempt to dispose of the Agent before returning Pi's native tool call.
 7. Pi validates arguments, runs permission hooks, executes the tool, and supplies the real result on the next completion.
 
-If cancellation or disposal fails, no executable tool request is returned.
-On a normal exit, the temporary directory is removed.
+If cancellation cannot be confirmed, no executable tool request is returned. If cancellation is confirmed but disposal fails, Pi can still receive the tool call.
+Workspace removal is best-effort; late SDK writes or process exit can leave files behind.
 
 ## Safety and limits
 

@@ -39,7 +39,7 @@ export function abortAfter(
 export function validateTimeout(ms: number): void {
   if (!Number.isSafeInteger(ms) || ms < 1 || ms > MAX_TIMEOUT_MS) {
     throw new Error(
-      `Timeouts must be integers between 1 and ${MAX_TIMEOUT_MS} ms.`,
+      `Deadline values must be integers between 1 and ${MAX_TIMEOUT_MS} ms.`,
     );
   }
 }
@@ -158,7 +158,7 @@ const BLOCKED_TEXT = [
   "SDK cleanup failed",
   "SDK cleanup timed out",
   "not confirmed",
-  "Timeouts must be",
+  "Deadline values must be",
   "Unsupported Cursor SDK request control",
   "image input and image tool results are not supported",
   "onPayload must return",

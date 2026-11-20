@@ -3,6 +3,7 @@ import type { ModelListItem, ModelVariant } from "@cursor/sdk";
 import {
   buildCatalog,
   catalogFromStored,
+  ensureAuto,
   resolveSelection,
   serializeSelections,
 } from "../src/catalog.js";
@@ -162,6 +163,32 @@ describe("SDK catalog", () => {
       const catalog = buildCatalog([kept, ...items]);
       expect(catalog.models.map((entry) => entry.id)).toContain("kept");
       expect(catalog.skipped.join("\n")).toMatch(/collision/i);
+    },
+  );
+
+  it.each([false, true])(
+    "omits both SDK items claiming the same generated id (reversed: %s)",
+    (reversed) => {
+      const items = [
+        model({
+          variants: [variant({}), variant({ context: "1m", fast: "true" })],
+        }),
+        model({
+          id: "model-1m",
+          variants: [variant({}), variant({ fast: "true" })],
+        }),
+      ];
+      const catalog = buildCatalog([
+        model({ id: "kept" }),
+        ...(reversed ? items.reverse() : items),
+      ]);
+      expect(() => resolveSelection(catalog, "model-1m-fast")).toThrow(
+        /unknown/i,
+      );
+      expect(catalog.models.map(({ id }) => id)).toEqual(["kept"]);
+      expect([...catalog.entries.keys()]).toEqual(["kept"]);
+      expect(catalog.skipped).toHaveLength(2);
+      expect(catalog.skipped.join("\n")).toMatch(/collision: model-1m-fast/i);
     },
   );
 
@@ -460,6 +487,60 @@ describe("SDK catalog", () => {
     );
     expect(() => resolveSelection(catalog, "missing")).toThrow(/unknown/i);
   });
+
+  it.each<{ label: string; items: ModelListItem[] }>([
+    {
+      label: "invalid variants",
+      items: [model({ id: "auto", variants: [variant({ effort: "ultra" })] })],
+    },
+    {
+      label: "conflicting SDK rows",
+      items: [
+        model({ id: "auto" }),
+        model({ id: "auto", displayName: "Other Auto" }),
+      ],
+    },
+    {
+      label: "only a suffixed SDK route",
+      items: [model({ id: "auto", variants: [variant({ fast: "true" })] })],
+    },
+  ])(
+    "does not synthesize a bare auto when the SDK listed $label",
+    ({ items }) => {
+      const catalog = ensureAuto(buildCatalog([model(), ...items]));
+      expect(catalog.models.map(({ id }) => id)).not.toContain("auto");
+      expect(() => resolveSelection(catalog, "auto")).toThrow(/unknown/i);
+    },
+  );
+
+  it("adds a single fallback when the SDK did not list auto", () => {
+    const catalog = ensureAuto(ensureAuto(buildCatalog([model()])));
+    expect(catalog.models.map(({ id }) => id)).toEqual(["model", "auto"]);
+    expect(resolveSelection(catalog, "auto")).toEqual({ id: "auto" });
+  });
+
+  it.each([
+    { label: "a saved omission", omitted: true },
+    { label: "a damaged auto row", damagedRow: true },
+    { label: "a damaged auto selection", damagedSelection: true },
+  ])(
+    "does not synthesize auto when restoring $label",
+    ({ omitted, damagedRow, damagedSelection }) => {
+      const catalog = buildCatalog([model()]);
+      const restored = catalogFromStored({
+        models: damagedRow
+          ? [...catalog.models, { id: "auto" }]
+          : catalog.models,
+        cursorSdkSelections: {
+          ...serializeSelections(catalog),
+          ...(damagedSelection ? { auto: null } : {}),
+        },
+        cursorSdkAutoOmitted: omitted,
+      });
+      expect(restored?.models.map(({ id }) => id)).toEqual(["model"]);
+      expect(() => resolveSelection(restored!, "auto")).toThrow(/unknown/i);
+    },
+  );
 
   it("restores saved selections and ignores a damaged row", () => {
     const catalog = buildCatalog([

@@ -25,7 +25,7 @@ describe("deadline primitives", () => {
   it.each([0, -1, 1.5, NaN, Infinity, MAX_TIMEOUT_MS + 1])(
     "rejects invalid timeout %s before acquiring an agent",
     async (ms) => {
-      expect(() => validateTimeout(ms)).toThrow(/Timeouts/);
+      expect(() => validateTimeout(ms)).toThrow(/Deadline values/);
       const deps = { createAgent: vi.fn() };
       const request = {
         apiKey: "test",
@@ -35,10 +35,10 @@ describe("deadline primitives", () => {
       };
       await expect(
         runCompletion({ ...request, timeoutMs: ms }, deps),
-      ).rejects.toThrow(/Timeouts/);
+      ).rejects.toThrow(/Deadline values/);
       await expect(
         runCompletion({ ...request, cleanupTimeoutMs: ms }, deps),
-      ).rejects.toThrow(/Timeouts/);
+      ).rejects.toThrow(/Deadline values/);
       expect(deps.createAgent).not.toHaveBeenCalled();
     },
   );
