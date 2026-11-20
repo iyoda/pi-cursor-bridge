@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,11 @@ import type {
   ProviderConfig,
 } from "@earendil-works/pi-coding-agent";
 import extension from "../src/index.js";
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  writeSync: vi.fn(),
+}));
 
 const model: Model<"cursor-sdk-api"> = {
   type: "chat",
@@ -45,6 +51,8 @@ describe("cursor-sdk extension wiring", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.mocked(writeSync).mockReset();
+    vi.unstubAllEnvs();
     if (previousDataDir === undefined) delete process.env.CURSOR_DATA_DIR;
     else process.env.CURSOR_DATA_DIR = previousDataDir;
     await Promise.all(
@@ -98,40 +106,76 @@ describe("cursor-sdk extension wiring", () => {
     expect(models.map((item) => item.id)).toEqual(["from-index", "auto"]);
   });
 
-  it("creates the SDK agent when Pi requests a completion", async () => {
-    previousDataDir = process.env.CURSOR_DATA_DIR;
-    const dataDir = await mkdtemp(join(tmpdir(), "pi-cursor-sdk-index-"));
-    dataDirs.push(dataDir);
-    process.env.CURSOR_DATA_DIR = dataDir;
-    const create = vi.spyOn(Agent, "create").mockResolvedValue({
-      async send() {
-        return {
-          status: "finished",
-          async wait() {
-            return { status: "finished", result: "from-index" };
+  it.each(["off", "other", "on", "write-error"])(
+    "creates the SDK agent and handles payload metrics mode %s",
+    async (mode) => {
+      vi.stubEnv(
+        "PI_CURSOR_SDK_PAYLOAD_METRICS",
+        mode === "off" ? undefined : mode === "other" ? "true" : "1",
+      );
+      const write = vi.mocked(writeSync);
+      if (mode === "write-error") {
+        write.mockImplementation(() => {
+          throw Object.assign(new Error("closed stderr"), { code: "EPIPE" });
+        });
+      }
+      previousDataDir = process.env.CURSOR_DATA_DIR;
+      const dataDir = await mkdtemp(join(tmpdir(), "pi-cursor-sdk-index-"));
+      dataDirs.push(dataDir);
+      process.env.CURSOR_DATA_DIR = dataDir;
+      const create = vi.spyOn(Agent, "create").mockResolvedValue({
+        async send() {
+          return {
+            status: "finished",
+            async wait() {
+              return { status: "finished", result: "from-index" };
+            },
+            async cancel() {},
+            stream: async function* () {},
+          };
+        },
+        async [Symbol.asyncDispose]() {},
+      } as unknown as SDKAgent);
+      const config = providerConfig();
+      const events: AssistantMessageEvent[] = [];
+      for await (const event of config.streamSimple!(
+        model,
+        normalizeContext({ messages: [] }),
+        { apiKey: "test-key" },
+      )) {
+        events.push(event);
+      }
+      expect(events.at(-1)?.type).toBe("done");
+      if (mode === "off" || mode === "other") {
+        expect(write).not.toHaveBeenCalled();
+      } else {
+        expect(write).toHaveBeenCalledTimes(1);
+        const [fd, line] = write.mock.calls[0]!;
+        expect(fd).toBe(2);
+        expect(line).toMatch(/^[^\n]+\n$/u);
+        expect(String(line)).not.toContain("test-key");
+        expect(JSON.parse(String(line))).toEqual({
+          event: "cursor-sdk-send",
+          promptBytes: expect.any(Number),
+          promptBreakdown: {
+            instructionsBytes: expect.any(Number),
+            historyBytes: 0,
+            toolResultsBytes: 0,
+            promptToolsBytes: 2,
+            harnessNotesBytes: expect.any(Number),
+            framingBytes: expect.any(Number),
           },
-          async cancel() {},
-          stream: async function* () {},
-        };
-      },
-      async [Symbol.asyncDispose]() {},
-    } as unknown as SDKAgent);
-    const config = providerConfig();
-    const events: AssistantMessageEvent[] = [];
-    for await (const event of config.streamSimple!(
-      model,
-      normalizeContext({ messages: [] }),
-      { apiKey: "test-key" },
-    )) {
-      events.push(event);
-    }
-    expect(events.at(-1)?.type).toBe("done");
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        apiKey: "test-key",
-        model: { id: "auto" },
-        local: expect.objectContaining({ enableAgentRetries: false }),
-      }),
-    );
-  });
+          sdkCustomToolsJsonBytes: 2,
+          toolCount: 0,
+        });
+      }
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          apiKey: "test-key",
+          model: { id: "auto" },
+          local: expect.objectContaining({ enableAgentRetries: false }),
+        }),
+      );
+    },
+  );
 });

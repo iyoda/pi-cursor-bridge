@@ -23,10 +23,27 @@ import type {
 } from "@cursor/sdk";
 import type { Tool } from "@earendil-works/pi-ai";
 
+export interface PromptBreakdown {
+  instructionsBytes: number;
+  historyBytes: number;
+  toolResultsBytes: number;
+  promptToolsBytes: number;
+  harnessNotesBytes: number;
+  framingBytes: number;
+}
+
+export interface SendMetrics {
+  promptBytes: number;
+  promptBreakdown: PromptBreakdown | null;
+  sdkCustomToolsJsonBytes: number;
+  toolCount: number;
+}
+
 export interface CompletionRequest {
   apiKey: string;
   model: ModelSelection;
   prompt: string;
+  promptBreakdown?: PromptBreakdown | null;
   tools: Tool[];
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -56,6 +73,7 @@ export interface WorkspaceRemovalHooks {
 export interface CompletionDependencies {
   createAgent(options: AgentOptions): Promise<BridgeAgent>;
   workspaceRemoval?: WorkspaceRemovalHooks;
+  noteSend?(metrics: SendMetrics): void;
 }
 export interface CapturedCall {
   id: string;
@@ -228,6 +246,20 @@ export async function runCompletion(
     });
     agent = await acquire(creation, (lateAgent) => cleanup(lateAgent));
     signal.throwIfAborted();
+    if (deps.noteSend) {
+      try {
+        deps.noteSend({
+          promptBytes: Buffer.byteLength(request.prompt),
+          promptBreakdown: request.promptBreakdown ?? null,
+          sdkCustomToolsJsonBytes: Buffer.byteLength(
+            JSON.stringify(customTools),
+          ),
+          toolCount: request.tools.length,
+        });
+      } catch {
+        // Diagnostics must not affect inference.
+      }
+    }
     const sending = agent.send(request.prompt, {
       onDelta: (event) => {
         pendingDeltas += 1;

@@ -109,6 +109,14 @@ Workspace removal is best-effort; late SDK writes or process exit can leave file
 - Transient SDK transport failures, such as a stalled or prematurely closed connection, are reported with a retryable marker so Pi's retry policy can retry them. SDK-internal agent retries stay disabled.
 - Waiting for workspace creation is also subject to interruption and the deadline. A workspace created after interruption is deleted later, and no SDK Agent is created. If Agent acquisition returns after cancellation, cleanup is deferred. If interruption happens while waiting for send, the acquired Agent is disposed immediately within the time limit, and a Run that returns later is cancelled separately. Agent disposal runs once. A workspace that an unresolved send may still use is retained until post-processing finishes. If acquisition never returns or cleanup fails, a temporary directory and process may remain. They can contain the conversation, so do not share them.
 
+## Measure payload size
+
+Start Pi with `PI_CURSOR_SDK_PAYLOAD_METRICS=1` to print a `cursor-sdk-send` JSON line to stderr for each `agent.send()` attempt. This is off by default. A Pi retry that reaches the SDK is another event; a failure before `send()` is not counted.
+
+The event contains only UTF-8 byte sizes and the number of registered tools. `promptBreakdown` separates instructions, history other than tool results, tool results, tool definitions in the prompt, harness notes, and JSON framing. If `onPayload` changes the prompt, its total is measured but the breakdown is `null`. `sdkCustomToolsJsonBytes` measures the JSON representation of the registered tool definitions separately (callbacks are not included); it is not part of `promptBytes`.
+
+These metrics do not contain prompts, tool arguments, tool names, or API keys. They are not HTTP sizes, model tokens, or billed usage, and do not include SDK internals, cache behavior, or server-side retries. The plugin does not create a metrics file or send telemetry.
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the check commands, and `npm run pack:check`.

@@ -61,6 +61,68 @@ function stream(
 }
 
 describe("Pi provider stream", () => {
+  it("measures UTF-8 prompt sections without changing the dispatched prompt", async () => {
+    const deps = { ...dependencies(), measurePayload: true };
+    let original = "";
+    const context = normalizeContext({
+      systemPrompt: "指示",
+      messages: [
+        { role: "user", content: "質問", timestamp: 1 },
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "read",
+          content: [{ type: "text", text: "結果" }],
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+    });
+    await stream(
+      deps,
+      {
+        onPayload: (payload) => {
+          original = (payload as { prompt: string }).prompt;
+        },
+      },
+      { context },
+    ).result();
+    const request = vi.mocked(deps.complete).mock.calls[0]![0];
+    expect(request.prompt).toBe(original);
+    const [json, ...notes] = original.split("\n");
+    const { instructions, transcript, tools } = JSON.parse(json!);
+    const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+    const expected = {
+      instructionsBytes: bytes(instructions),
+      historyBytes: bytes(transcript[0]),
+      toolResultsBytes: bytes(transcript[1]),
+      promptToolsBytes: bytes(tools),
+      harnessNotesBytes: Buffer.byteLength(notes.join("\n")),
+    };
+    expect(request.promptBreakdown).toEqual({
+      ...expected,
+      framingBytes:
+        Buffer.byteLength(original) -
+        Object.values(expected).reduce((sum, n) => sum + n, 0),
+    });
+  });
+
+  it.each(["replace", "mutate"])(
+    "does not attribute a prompt changed by onPayload (%s)",
+    async (kind) => {
+      const deps = { ...dependencies(), measurePayload: true };
+      await stream(deps, {
+        onPayload: (payload) => {
+          if (kind === "replace") return { prompt: "変更" };
+          (payload as { prompt: string }).prompt = "変更";
+        },
+      }).result();
+      expect(vi.mocked(deps.complete).mock.calls[0]![0]).toMatchObject({
+        prompt: "変更",
+        promptBreakdown: null,
+      });
+    },
+  );
   it("redacts credentials and terminal controls in catalog diagnostics", async () => {
     const deps = dependencies();
     vi.mocked(deps.listModels).mockResolvedValue([

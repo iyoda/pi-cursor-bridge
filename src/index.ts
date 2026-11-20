@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { Agent, Cursor } from "@cursor/sdk";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runCompletion } from "./bridge.js";
@@ -5,14 +6,25 @@ import { CatalogRefreshError } from "./catalog.js";
 import { createProviderConfig } from "./provider.js";
 
 export default function cursorSdkExtension(pi: ExtensionAPI): void {
+  const measurePayload = process.env.PI_CURSOR_SDK_PAYLOAD_METRICS === "1";
   let omittedModels = 0;
   let omittedDetails: readonly string[] = [];
   pi.registerProvider(
     "cursor-sdk",
     createProviderConfig({
+      measurePayload,
       complete: (request) =>
         runCompletion(request, {
           createAgent: (options) => Agent.create(options),
+          noteSend: measurePayload
+            ? (metrics) => {
+                // Keep write errors synchronous so the bridge can drop failed diagnostics.
+                writeSync(
+                  2,
+                  `${JSON.stringify({ event: "cursor-sdk-send", ...metrics })}\n`,
+                );
+              }
+            : undefined,
         }),
       listModels: async (apiKey, signal) => {
         signal.throwIfAborted();

@@ -88,6 +88,41 @@ function toolCallStarted(callId = "sdk-call") {
 }
 
 describe("official SDK completion", () => {
+  it("records one metadata-only event per send attempt, including a failed send", async () => {
+    const h = harness();
+    const noteSend = vi.fn();
+    const prompt = "秘密-looking-prompt";
+    const tools = [
+      {
+        name: "private-tool",
+        description: "private-description",
+        parameters: { type: "object" },
+      },
+    ];
+    h.send.mockRejectedValueOnce(new Error("private-error"));
+    await expect(
+      runCompletion(
+        { ...request, prompt, tools, promptBreakdown: null },
+        { ...h, noteSend },
+      ),
+    ).rejects.toThrow("private-error");
+    await runCompletion(
+      { ...request, prompt, tools, promptBreakdown: null },
+      { ...h, noteSend },
+    );
+    expect(noteSend).toHaveBeenCalledTimes(2);
+    expect(noteSend).toHaveBeenLastCalledWith({
+      promptBytes: Buffer.byteLength(prompt),
+      promptBreakdown: null,
+      sdkCustomToolsJsonBytes: Buffer.byteLength(
+        JSON.stringify(h.options.local?.customTools),
+      ),
+      toolCount: 1,
+    });
+    expect(JSON.stringify(noteSend.mock.calls)).not.toMatch(
+      /private|秘密|test-key/,
+    );
+  });
   it("returns on abort during acquisition and disposes an agent that arrives late", async () => {
     const h = harness();
     const create = h.createAgent.getMockImplementation()!;
@@ -104,7 +139,11 @@ describe("official SDK completion", () => {
       });
     });
     const controller = new AbortController();
-    const pending = runCompletion({ ...request, signal: controller.signal }, h);
+    const noteSend = vi.fn();
+    const pending = runCompletion(
+      { ...request, signal: controller.signal },
+      { ...h, noteSend },
+    );
     const rejected = expect(pending).rejects.toThrow(/abort/);
     await started;
     controller.abort(new Error("user aborted"));
@@ -112,6 +151,7 @@ describe("official SDK completion", () => {
     release({ send: h.send, [Symbol.asyncDispose]: h.dispose });
     await vi.waitFor(() => expect(h.dispose).toHaveBeenCalledTimes(1));
     expect(h.send).not.toHaveBeenCalled();
+    expect(noteSend).not.toHaveBeenCalled();
   });
 
   it("returns on abort during send and cancels a run that arrives late", async () => {
