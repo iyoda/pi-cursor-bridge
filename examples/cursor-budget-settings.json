@@ -1,0 +1,8 @@
+{
+  "retry": { "maxRetries": 1 },
+  "compaction": {
+    "modelOverrides": {
+      "cursor-sdk/auto": { "reserveTokens": 24000, "keepRecentTokens": 12000 }
+    }
+  }
+}

@@ -13,6 +13,11 @@ export default function cursorSdkExtension(pi: ExtensionAPI): void {
     "cursor-sdk",
     createProviderConfig({
       measurePayload,
+      savings: {
+        trimToolResults: process.env.PI_CURSOR_SDK_TRIM_TOOL_RESULTS === "1",
+        compactToolDefinitions:
+          process.env.PI_CURSOR_SDK_COMPACT_TOOL_DEFINITIONS === "1",
+      },
       complete: (request) =>
         runCompletion(request, {
           createAgent: (options) => Agent.create(options),

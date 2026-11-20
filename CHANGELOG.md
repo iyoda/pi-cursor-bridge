@@ -6,6 +6,8 @@ User-visible changes are recorded here. Headings match the `version` field in `p
 
 This is an early development release. It is not published to npm yet.
 
+- Add optional Cursor payload savings for historical tool results and repeated tool definitions, plus an example of Pi retry and compaction settings. The default prompt is unchanged.
+
 - Run inference through the official `@cursor/sdk` as Pi's independent provider `cursor-sdk`. The existing `cursor` provider is not replaced.
 - Keep Pi's tool execution, permissions, and history. SDK custom tools are used only to capture requests.
 - Choose the model, fast, and Max Mode with `/model`, and choose effort with Pi's Thinking controls.

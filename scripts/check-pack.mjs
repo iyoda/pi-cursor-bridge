@@ -31,6 +31,7 @@ const expected = [
   "docs/live-validation-results.md",
   "docs/live-validation.md",
   "examples/smoke-tools.ts",
+  "examples/cursor-budget-settings.json",
   "package.json",
 ].sort();
 const missing = expected.filter((path) => !entries.includes(path));

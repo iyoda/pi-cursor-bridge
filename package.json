@@ -28,6 +28,7 @@
     "dist",
     "docs",
     "examples/smoke-tools.ts",
+    "examples/cursor-budget-settings.json",
     "README.md",
     "CHANGELOG.md",
     "CODE_OF_CONDUCT.md",
