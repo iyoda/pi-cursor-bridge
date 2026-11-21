@@ -3,7 +3,7 @@ import { normalizeContext } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
-import { createProviderConfig } from "../src/provider.js";
+import { createCursorSdkProvider } from "../src/provider.js";
 import type { CompletionRequest } from "../src/bridge.js";
 
 const model = {
@@ -61,17 +61,19 @@ async function request(
   const complete = vi.fn(async (_request: CompletionRequest) => ({
     calls: [],
   }));
-  const config = createProviderConfig({
+  const provider = createCursorSdkProvider({
     complete,
     listModels: async () => [],
     login: vi.fn(),
     savings,
     measurePayload: true,
   });
-  const output = await config.streamSimple!(model, context, {
-    apiKey: "test-placeholder",
-    toolChoice,
-  }).result();
+  const output = await provider
+    .streamSimple(model, context, {
+      apiKey: "test-placeholder",
+      toolChoice,
+    })
+    .result();
   expect(output.stopReason).toBe("stop");
   const sent = complete.mock.calls[0]![0];
   return {

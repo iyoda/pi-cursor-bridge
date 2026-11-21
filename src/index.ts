@@ -3,15 +3,14 @@ import { Agent, Cursor } from "@cursor/sdk";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runCompletion } from "./bridge.js";
 import { CatalogRefreshError } from "./catalog.js";
-import { createProviderConfig } from "./provider.js";
+import { createCursorSdkProvider } from "./provider.js";
 
 export default function cursorSdkExtension(pi: ExtensionAPI): void {
   const measurePayload = process.env.PI_CURSOR_SDK_PAYLOAD_METRICS === "1";
   let omittedModels = 0;
   let omittedDetails: readonly string[] = [];
   pi.registerProvider(
-    "cursor-sdk",
-    createProviderConfig({
+    createCursorSdkProvider({
       measurePayload,
       savings: {
         trimToolResults: process.env.PI_CURSOR_SDK_TRIM_TOOL_RESULTS === "1",

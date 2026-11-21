@@ -9,10 +9,8 @@ import {
   type AssistantMessageEvent,
   type Model,
 } from "@earendil-works/pi-ai";
-import type {
-  ExtensionAPI,
-  ProviderConfig,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Provider } from "@earendil-works/pi-ai";
 import extension from "../src/index.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -34,15 +32,16 @@ const model: Model<"cursor-sdk-api"> = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
-function providerConfig(): ProviderConfig {
+function providerConfig(): Provider {
   const registerProvider = vi.fn<ExtensionAPI["registerProvider"]>();
   extension({
     registerProvider,
     registerCommand: vi.fn(),
   } as unknown as ExtensionAPI);
-  const config = registerProvider.mock.calls[0]?.[1];
-  if (!config) throw new Error("cursor-sdk provider was not registered");
-  return config;
+  // index.ts calls registerProvider(provider) — the Provider overload.
+  const provider = registerProvider.mock.calls[0]?.[0] as Provider | undefined;
+  if (!provider) throw new Error("cursor-sdk provider was not registered");
+  return provider;
 }
 
 describe("cursor-sdk extension wiring", () => {
@@ -72,12 +71,15 @@ describe("cursor-sdk extension wiring", () => {
       .mockResolvedValue([{ id: "from-index", displayName: "From Index" }]);
     const config = providerConfig();
     const signal = new AbortController().signal;
-    const onAuth = vi.fn();
+    const notify = vi.fn();
     await expect(
-      config.oauth!.login({
+      config.auth.oauth!.login({
         signal,
-        onAuth,
-      } as unknown as Parameters<NonNullable<typeof config.oauth>["login"]>[0]),
+        notify,
+        prompt: vi.fn(async () => ""),
+      } as unknown as Parameters<
+        NonNullable<typeof config.auth.oauth>["login"]
+      >[0]),
     ).resolves.toMatchObject({ access: "wired-key", expires: 123 });
     expect(login).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -91,9 +93,11 @@ describe("cursor-sdk extension wiring", () => {
     const sent = login.mock.calls[0]?.[0];
     if (!sent?.onLoginUrl) throw new Error("login options were not passed");
     sent.onLoginUrl(url);
-    expect(onAuth).toHaveBeenCalledWith(expect.objectContaining({ url }));
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "auth_url", url }),
+    );
 
-    const models = await config.refreshModels!({
+    await config.refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
       signal,
@@ -103,7 +107,10 @@ describe("cursor-sdk extension wiring", () => {
       },
     });
     expect(list).toHaveBeenCalledWith({ apiKey: "test-key" });
-    expect(models.map((item) => item.id)).toEqual(["from-index", "auto"]);
+    expect(config.getModels().map((item) => item.id)).toEqual([
+      "from-index",
+      "auto",
+    ]);
   });
 
   it.each(["off", "other", "on", "write-error"])(

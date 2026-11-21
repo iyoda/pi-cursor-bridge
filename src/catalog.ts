@@ -1,6 +1,11 @@
 import type { ModelListItem, ModelSelection, ModelVariant } from "@cursor/sdk";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
+import type { Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
+
+export const CURSOR_SDK_API = "cursor-sdk-api" as const;
+export const CURSOR_SDK_PROVIDER = "cursor-sdk" as const;
+export const CURSOR_SDK_BASE_URL = "https://api2.cursor.sh";
+
+type CursorSdkModel = Model<typeof CURSOR_SDK_API>;
 
 export class CatalogRefreshError extends Error {
   override name = "CatalogRefreshError";
@@ -12,7 +17,7 @@ export interface CatalogEntry {
 }
 
 export interface Catalog {
-  models: NonNullable<ProviderConfig["models"]>;
+  models: CursorSdkModel[];
   entries: Map<string, CatalogEntry>;
   skipped: string[];
 }
@@ -168,6 +173,9 @@ function buildItem(
     models.push({
       id,
       name,
+      api: CURSOR_SDK_API,
+      provider: CURSOR_SDK_PROVIDER,
+      baseUrl: CURSOR_SDK_BASE_URL,
       reasoning,
       ...(reasoning ? { thinkingLevelMap } : {}),
       input: ["text"],
@@ -297,6 +305,9 @@ function isPiModel(
   const model = value as {
     id?: unknown;
     name?: unknown;
+    api?: unknown;
+    provider?: unknown;
+    baseUrl?: unknown;
     type?: unknown;
     reasoning?: unknown;
     input?: unknown;

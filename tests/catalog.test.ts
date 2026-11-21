@@ -473,6 +473,9 @@ describe("SDK catalog", () => {
       {
         id: "auto",
         name: "Cursor Auto",
+        api: "cursor-sdk-api",
+        provider: "cursor-sdk",
+        baseUrl: "https://api2.cursor.sh",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
