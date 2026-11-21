@@ -11,15 +11,24 @@ The steps and template below are a procedure for recording results. They do not 
 - Use an empty working directory that contains no real work files or secrets.
 - Do not paste the key into arguments, prompts, or records. Use `CURSOR_API_KEY` or Pi login.
 - Stop if an unexpected tool appears, requests repeat without limit, or cancellation fails.
-- If cancellation or disposal fails, treat a leftover `pi-cursor-sdk-*` workspace as confidential.
+- Treat any leftover `pi-cursor-sdk-*` workspace and SDK transcripts under the dedicated `CURSOR_DATA_DIR` as confidential.
 
 ## Preparation
 
 In the repository, run `npm ci --ignore-scripts` and `npm run check`.
-From an empty working directory, point at the extension with an absolute path.
+In a dedicated shell, set `BRIDGE_DIR` to the absolute path to the checkout. Create separate working, Pi settings, and SDK data directories. Use these same settings for both examples below.
+This does not isolate your OS home directory or prohibit network access; the live requests still go to Cursor.
 
 ```bash
-pi --no-extensions --no-builtin-tools -e /absolute/path/pi-cursor-sdk/dist/index.js --model cursor-sdk/auto
+export BRIDGE_DIR=/absolute/path/pi-cursor-bridge
+smoke_root=$(mktemp -d) || exit 1
+export PI_CODING_AGENT_DIR="$smoke_root/pi" CURSOR_DATA_DIR="$smoke_root/cursor"
+mkdir -p "$PI_CODING_AGENT_DIR" "$CURSOR_DATA_DIR" "$smoke_root/work" || exit 1
+printf '%s\n' '{"retry":{"enabled":false}}' > "$PI_CODING_AGENT_DIR/settings.json" || exit 1
+cd "$smoke_root/work" || exit 1
+pi --no-extensions --no-builtin-tools --no-mcp --no-skills \
+  --no-prompt-templates --no-themes --no-context-files \
+  -e "$BRIDGE_DIR/dist/index.js" --model cursor-sdk/auto
 ```
 
 Use `/cursor-sdk-refresh` and `/model` to select the model explicitly.
@@ -41,7 +50,10 @@ This extension exposes one in-memory tool that returns the fixed string `SMOKE_O
 It does not expose file operations, a shell, HTTP, or subagents.
 
 ```bash
-pi --no-extensions --no-builtin-tools -e /absolute/path/pi-cursor-sdk/dist/index.js -e /absolute/path/pi-cursor-sdk/examples/smoke-tools.ts --model cursor-sdk/auto
+pi --no-extensions --no-builtin-tools --no-mcp --no-skills \
+  --no-prompt-templates --no-themes --no-context-files \
+  -e "$BRIDGE_DIR/dist/index.js" -e "$BRIDGE_DIR/examples/smoke-tools.ts" \
+  --model cursor-sdk/auto
 ```
 
 `/smoke-status` shows the execution count. A new extension instance resets it.

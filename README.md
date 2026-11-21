@@ -1,7 +1,7 @@
-# pi-cursor-sdk
+# pi-cursor-bridge
 
-An independent provider extension for the Pi Coding Agent that uses the official `@cursor/sdk`.
-The provider ID is **`cursor-sdk`**. It does not replace the existing `cursor` provider.
+An independent provider extension for the Pi Coding Agent that uses the official `@cursor/sdk`. The npm package name is `@iyoda/pi-cursor-bridge`.
+The provider ID remains **`cursor-sdk`**. The rename does not require migrating Pi credentials or changing a saved model ID that is still in the catalog. It does not replace the existing `cursor` provider.
 
 **This is an early development release.** Verified paths and items that remain unverified are recorded in [Live validation results](docs/live-validation-results.md).
 See [CHANGELOG.md](CHANGELOG.md) for changes, [CONTRIBUTING.md](CONTRIBUTING.md) for development, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for participation, and [SECURITY.md](SECURITY.md) for vulnerability reports.
@@ -13,7 +13,19 @@ The Cursor SDK is an agent SDK, not a model-inference API. This extension is a t
 - Pi 1.5.2 is the development baseline and has live inference coverage. Pi 1.6.0 passed the offline package install, model discovery, and removal check; live inference on 1.6.0 and other Pi versions are unverified.
 - A Cursor SDK user or service-account API key
 
-Before publication, build the checked-out directory and load the extension explicitly.
+### Install from npm
+
+Once a version is available on npm, run:
+
+```bash
+pi install npm:@iyoda/pi-cursor-bridge
+```
+
+Restart Pi and follow [Authentication](#authentication). To uninstall, run `pi remove npm:@iyoda/pi-cursor-bridge`.
+
+### Build from source
+
+To try a checkout without installing from npm, build it and load the extension explicitly.
 
 ```bash
 npm ci --ignore-scripts
@@ -92,6 +104,8 @@ After `/cursor-sdk-refresh`, select a row shown by `/model`. A restart restores 
 
 If cancellation cannot be confirmed, no executable tool request is returned. If cancellation is confirmed but disposal fails, Pi can still receive the tool call.
 Workspace removal is best-effort; late SDK writes or process exit can leave files behind.
+
+The Cursor SDK may also write conversation transcripts under `$CURSOR_DATA_DIR/projects` (default: `~/.cursor/projects`). The extension does not delete anything from this shared store. Treat transcripts and any leftover temporary workspace as private. To keep this extension's SDK data separate, set `CURSOR_DATA_DIR` to a dedicated private directory before starting Pi. If removing old records manually, verify they belong to your own runs first. See [SECURITY.md](SECURITY.md).
 
 ## Safety and limits
 

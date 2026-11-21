@@ -28,6 +28,6 @@ Do not share API keys, conversation logs, or temporary workspaces.
 - `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` are provided by Pi. Do not add them to `dependencies`.
 - Do not vendor `@cursor/sdk`. Keep it external in the build.
 - Run `npm run pack:check` before publishing. It checks the tarball file list, the MIT license, the `*` peer range, and that `@cursor/sdk` stays external.
-- Run `npm run install:check -- ./atikoro-pi-cursor-sdk-0.1.0.tgz` on the generated tarball (use the filename printed by `npm pack` if the version changes). This installs into a temporary project, checks Pi's package discovery and removal, and does not use real credentials or run inference. npm may contact the registry to resolve dependencies. Append `1.6.0` to run it against Pi 1.6.0 instead of the development version.
+- `npm run pack:check` writes its tarball under `.pack/` without deleting other archives. Run `npm run install:check -- ./.pack/iyoda-pi-cursor-bridge-0.1.0.tgz` on the generated tarball (use the path printed by the check if the version changes). This installs into a temporary project, checks Pi's package discovery and removal, and does not use real credentials or run inference. npm may contact the registry to resolve dependencies. Append `1.6.0` to run it against Pi 1.6.0 instead of the development version.
 
 Do not commit secrets, auth files, or `.env` files.

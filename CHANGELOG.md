@@ -2,9 +2,11 @@
 
 User-visible changes are recorded here. Headings match the `version` field in `package.json`.
 
-## [0.1.0] - 2026-11-13
+## [0.1.0]
 
-This is an early development release. It is not published to npm yet.
+This is an early development release.
+
+- Rename the extension to `pi-cursor-bridge` (`@iyoda/pi-cursor-bridge` on npm). Keep the Pi provider ID `cursor-sdk` and existing commands and settings unchanged.
 
 - Add optional Cursor payload savings for historical tool results and repeated tool definitions, plus an example of Pi retry and compaction settings. The default prompt is unchanged.
 

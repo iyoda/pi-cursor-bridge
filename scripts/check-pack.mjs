@@ -1,17 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 
-const archives = readdirSync(".")
-  .filter((name) => name.endsWith(".tgz"))
-  .sort();
-if (archives.length !== 1) {
-  console.error(
-    `Expected exactly one npm pack tarball, found ${archives.length}: ${archives.join(", ")}`,
-  );
-  process.exit(1);
-}
-
-const archive = archives[0];
+const destination = ".pack";
+const expectedName = "@iyoda/pi-cursor-bridge";
+const archiveStem = expectedName.slice(1).replace("/", "-");
+const { name, version } = JSON.parse(readFileSync("package.json", "utf8"));
+if (name !== expectedName) throw new Error(`Expected package ${expectedName}.`);
+const npm = process.env.npm_execpath;
+if (!npm) throw new Error("Run through npm run pack:check.");
+mkdirSync(destination, { recursive: true });
+execFileSync(
+  process.execPath,
+  [npm, "pack", "--pack-destination", destination],
+  {
+    stdio: "inherit",
+  },
+);
+const archive = join(destination, `${archiveStem}-${version}.tgz`);
 const entries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" })
   .split("\n")
   .map((line) => line.trim())
@@ -48,6 +54,13 @@ const manifest = JSON.parse(
     encoding: "utf8",
   }),
 );
+if (
+  manifest.name !== expectedName ||
+  basename(archive) !== `${archiveStem}-${manifest.version}.tgz`
+) {
+  console.error(`Expected the ${expectedName} package and tarball.`);
+  process.exit(1);
+}
 const peers = manifest.peerDependencies ?? {};
 const dependencies = manifest.dependencies ?? {};
 if (manifest.license !== "MIT" || manifest.private === true) {

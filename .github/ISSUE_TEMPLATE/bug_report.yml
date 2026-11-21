@@ -22,7 +22,7 @@ body:
     attributes:
       label: Environment
       description: Versions of Node, Pi, this package, and the Cursor SDK
-      placeholder: Node 22.19.0 / Pi 1.5.2 / pi-cursor-sdk 0.1.0 / @cursor/sdk 1.3.1
+      placeholder: Node 22.19.0 / Pi 1.5.2 / pi-cursor-bridge 0.1.0 / @cursor/sdk 1.3.1
     validations:
       required: true
   - type: textarea

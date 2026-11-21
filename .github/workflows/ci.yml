@@ -30,5 +30,5 @@ jobs:
       - run: npm audit --omit=dev
       # prepack runs the full check again, then pack:check verifies the tarball.
       - run: npm run pack:check
-      - run: npm run install:check -- ./atikoro-pi-cursor-sdk-*.tgz 1.5.2
-      - run: npm run install:check -- ./atikoro-pi-cursor-sdk-*.tgz 1.6.0
+      - run: npm run install:check -- ./.pack/iyoda-pi-cursor-bridge-*.tgz 1.5.2
+      - run: npm run install:check -- ./.pack/iyoda-pi-cursor-bridge-*.tgz 1.6.0

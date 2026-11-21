@@ -187,6 +187,41 @@ describe("official SDK completion", () => {
       ).toBe(false),
     );
   });
+  it("suppresses retries after an idle deadline while send is pending", async () => {
+    const h = harness();
+    let start!: () => void;
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    let release!: (value: BridgeRun) => void;
+    h.send.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+          start();
+        }),
+    );
+    vi.mocked(h.run.cancel).mockRejectedValue(new Error("cancel failed"));
+    const pending = runCompletion({ ...request, timeoutMs: 50 }, h);
+    const observed = pending.catch((error: unknown) => error);
+    await started;
+    const error = (await observed) as Error;
+    expect(h.run.cancel).not.toHaveBeenCalled();
+    release(h.run);
+    await vi.waitFor(() => expect(h.run.cancel).toHaveBeenCalledOnce());
+    expect(error.message).toBe("SDK run termination could not be confirmed.");
+    expect(error.cause).toEqual(
+      expect.objectContaining({ message: "Cursor completion timed out." }),
+    );
+    expect(
+      isRetryableAssistantError({
+        stopReason: "error",
+        errorMessage: markRetryableTransportFailure(error.message),
+      } as AssistantMessage),
+    ).toBe(false);
+    await expect(access(h.options.local!.cwd!)).resolves.toBeUndefined();
+  });
+
   it.each(["create", "send"])(
     "observes a late %s rejection and removes the workspace",
     async (phase) => {
@@ -553,9 +588,18 @@ describe("official SDK completion", () => {
     expect(failure).toBeInstanceOf(Error);
     const error = failure as Error;
     const workspace = h.options.local!.cwd!;
-    expect(error.message).toBe("Premature close");
-    expect(error.cause).toBeInstanceOf(AggregateError);
-    const cleanup = error.cause as AggregateError;
+    expect(error.message).toBe("SDK run termination could not be confirmed.");
+    expect(
+      isRetryableAssistantError({
+        stopReason: "error",
+        errorMessage: markRetryableTransportFailure(error.message),
+      } as AssistantMessage),
+    ).toBe(false);
+    expect(error.cause).toBeInstanceOf(Error);
+    const runFailure = error.cause as Error;
+    expect(runFailure.message).toBe("Premature close");
+    expect(runFailure.cause).toBeInstanceOf(AggregateError);
+    const cleanup = runFailure.cause as AggregateError;
     expect(cleanup.cause).toEqual({ retainedWorkspace: workspace });
     expect(cleanup.errors).toEqual([
       expect.objectContaining({ message: "cancel failed" }),

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { accessSync, constants, statSync } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlLocalAgentStore } from "@cursor/sdk";
 import {
@@ -330,7 +329,25 @@ export async function runCompletion(
       cleanupFailure = error;
     }
   }
-  if (failure) throw attachCleanupCause(failure, cleanupFailure);
+  if (failure) {
+    const cause = attachCleanupCause(failure, cleanupFailure);
+    // If acquisition was interrupted with an agent but no run, send may
+    // already have been accepted remotely. Late cleanup cannot gate a retry.
+    const sendUnconfirmed = cleanupDeferred && agent && !run;
+    // The parent signal also carries the provider's idle deadline.
+    const idleExpired =
+      signal.reason instanceof Error &&
+      signal.reason.message === COMPLETION_TIMEOUT_ERROR;
+    if (
+      cancelFailed ||
+      (!finished && run?.status === "running") ||
+      (sendUnconfirmed && idleExpired)
+    ) {
+      // Pi can retry on the original error text even without a retry marker.
+      throw new Error("SDK run termination could not be confirmed.", { cause });
+    }
+    throw cause;
+  }
   if (completed) return completed;
   if (cancelFailed) throw cleanupFailure ?? new Error("SDK cleanup failed");
   if (run?.status === "cancelled") {
@@ -353,7 +370,7 @@ export async function runCompletion(
     const reason = observed.error
       ? formatFailure(observed.error)
       : `run reported ${observed.status}`;
-    return new Error(`${message}: ${reason}`);
+    return new Error(message, { cause: new Error(reason) });
   }
 
   function observeSummaries(active: BridgeRun): void {
@@ -543,25 +560,6 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-/** Directory where the SDK writes the transcript for this temporary workspace. */
-export function cursorProjectDir(workspace: string): string | undefined {
-  const slug = workspace
-    .replace(/[^a-zA-Z0-9]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!slug) return undefined;
-  const override = process.env.CURSOR_DATA_DIR?.trim();
-  if (override) return join(override, "projects", slug);
-  try {
-    const home = homedir();
-    if (!home.trim() || !statSync(home).isDirectory()) return undefined;
-    accessSync(home, constants.W_OK);
-    return join(home, ".cursor", "projects", slug);
-  } catch {
-    return undefined;
-  }
-}
-
 const defaultWorkspaceRemoval: WorkspaceRemovalHooks = {
   schedule(callback, ms) {
     return realSetTimeout(callback, ms);
@@ -575,30 +573,11 @@ async function removePrivateWorkspace(
   workspace: string,
   removal: WorkspaceRemovalHooks = defaultWorkspaceRemoval,
 ): Promise<void> {
-  const errors: unknown[] = [];
+  // Never derive deletion targets in the shared Cursor project store.
   try {
     await deleteWorkspace(workspace, removal);
-  } catch (error) {
-    errors.push(error);
   } finally {
     sweepWorkspaceLater(workspace, removal);
-  }
-  const transcript = cursorProjectDir(workspace);
-  if (transcript && transcript !== workspace) {
-    try {
-      await deleteWorkspace(transcript, removal);
-    } catch (error) {
-      errors.push(error);
-    } finally {
-      sweepWorkspaceLater(transcript, removal);
-    }
-  }
-  if (errors.length === 1) throw errors[0];
-  if (errors.length > 1) {
-    throw new AggregateError(
-      errors,
-      `SDK workspace removal failed: ${errors.map(String).join("; ")}`,
-    );
   }
 }
 

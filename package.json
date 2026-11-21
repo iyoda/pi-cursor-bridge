@@ -1,5 +1,5 @@
 {
-  "name": "@atikoro/pi-cursor-sdk",
+  "name": "@iyoda/pi-cursor-bridge",
   "version": "0.1.0",
   "description": "Pi provider using the official Cursor SDK with Pi-owned tool execution",
   "type": "module",
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/atikoro/pi-cursor-sdk.git"
+    "url": "git+https://github.com/iyoda/pi-cursor-bridge.git"
   },
   "publishConfig": {
     "access": "public"
@@ -57,7 +57,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "npm run typecheck && npm run format:check && npm test && npm run build",
-    "pack:check": "rm -f ./*.tgz && npm pack && node scripts/check-pack.mjs",
+    "pack:check": "node scripts/check-pack.mjs",
     "install:check": "node scripts/check-install.mjs"
   },
   "dependencies": {

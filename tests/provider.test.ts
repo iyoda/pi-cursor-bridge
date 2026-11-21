@@ -1,4 +1,6 @@
+import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCompletion, type BridgeRun } from "../src/bridge.js";
 import {
   isRetryableAssistantError,
   normalizeContext,
@@ -470,6 +472,76 @@ describe("Pi provider stream", () => {
   });
 
   describe("retryable transport failures", () => {
+    it.each(["idle deadline", "user abort"] as const)(
+      "does not retry a pending SDK send after %s",
+      async (trigger) => {
+        let workspace: string | undefined;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          let enterSend!: () => void;
+          const sending = new Promise<void>((resolve) => {
+            enterSend = resolve;
+          });
+          let resolveRun!: (run: BridgeRun) => void;
+          const cancel = vi.fn(async () => {
+            throw new Error("cancel failed");
+          });
+          const send = vi.fn(
+            () =>
+              new Promise<BridgeRun>((resolve) => {
+                resolveRun = resolve;
+                enterSend();
+              }),
+          );
+          const controller = new AbortController();
+          const deps = {
+            ...dependencies(),
+            complete: (request: Parameters<typeof runCompletion>[0]) =>
+              runCompletion(request, {
+                createAgent: async (options) => {
+                  workspace = options.local?.cwd;
+                  return { send, [Symbol.asyncDispose]: async () => {} };
+                },
+              }),
+          };
+          const events = collect(
+            stream(deps, { timeoutMs: 100, signal: controller.signal }),
+          );
+          await sending;
+          if (trigger === "idle deadline")
+            await vi.advanceTimersByTimeAsync(100);
+          else controller.abort(new Error("user aborted"));
+          const terminal = (await events).at(-1);
+          expect(cancel).not.toHaveBeenCalled();
+          resolveRun({
+            status: "running",
+            cancel,
+            wait: async () => {
+              throw new Error("late run must not be awaited");
+            },
+            stream: async function* () {},
+            usage: undefined,
+          });
+          await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+          expect(terminal?.type).toBe("error");
+          if (terminal?.type !== "error")
+            throw new Error("missing terminal error");
+          expect(terminal.reason).toBe(
+            trigger === "idle deadline" ? "error" : "aborted",
+          );
+          expect(terminal.error.errorMessage).toBe(
+            trigger === "idle deadline"
+              ? "SDK run termination could not be confirmed."
+              : "user aborted",
+          );
+          expect(isRetryableAssistantError(terminal.error)).toBe(false);
+        } finally {
+          vi.useRealTimers();
+          if (workspace) await rm(workspace, { recursive: true, force: true });
+        }
+      },
+    );
+
     it.each([
       {
         label: "premature close",

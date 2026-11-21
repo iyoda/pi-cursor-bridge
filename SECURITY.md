@@ -13,8 +13,8 @@ Do not send API keys, session tokens, auth files, conversation logs, or the cont
 Keep API keys in Pi's credential store or in `CURSOR_API_KEY`.
 This extension does not read Cursor CLI or IDE session tokens.
 
-An SDK temporary directory can contain the conversation.
-If cleanup fails, treat a leftover `pi-cursor-sdk-*` directory as private. Do not share it, and delete it after inspection.
+An SDK temporary workspace can contain the conversation. Treat any leftover `pi-cursor-sdk-*` workspace as private.
+The SDK may also write transcripts under `$CURSOR_DATA_DIR/projects` (default: `~/.cursor/projects`). The extension does not delete from this shared store. Treat those transcripts as private, and inspect only the data for your own run.
 
 ## Supported versions
 

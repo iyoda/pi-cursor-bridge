@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 *.tgz
+.pack/
 .env
 .env.*
 .omc/

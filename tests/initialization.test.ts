@@ -109,13 +109,10 @@ describe("completion initialization cleanup", () => {
         "/virtual/late-workspace",
         removalOptions,
       );
-      expect(fs.rm).toHaveBeenNthCalledWith(
-        2,
-        "/virtual/cursor-data/projects/virtual-late-workspace",
-        removalOptions,
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fs.rm.mock.calls.map(([path]) => path)).toEqual(
+        Array(4).fill("/virtual/late-workspace"),
       );
-      // Workspace and transcript each schedule 30ms, 200ms, and 1s.
-      expect(vi.getTimerCount()).toBe(6);
     },
   );
 
@@ -173,21 +170,16 @@ describe("completion initialization cleanup", () => {
       "/virtual/private-workspace",
       removalOptions,
     );
-    expect(fs.rm).toHaveBeenNthCalledWith(
-      2,
-      "/virtual/cursor-data/projects/virtual-private-workspace",
-      removalOptions,
-    );
-    expect(fs.rm).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(6);
+    expect(fs.rm).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(3);
     await vi.advanceTimersByTimeAsync(29);
-    expect(fs.rm).toHaveBeenCalledTimes(2);
+    expect(fs.rm).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(fs.rm).toHaveBeenCalledTimes(4);
+    expect(fs.rm).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(170);
-    expect(fs.rm).toHaveBeenCalledTimes(6);
+    expect(fs.rm).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(800);
-    expect(fs.rm).toHaveBeenCalledTimes(8);
+    expect(fs.rm).toHaveBeenCalledTimes(4);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -210,8 +202,7 @@ describe("completion initialization cleanup", () => {
       deps(createAgent),
     );
     // Retries wait on the setTimeout captured at import, not the fake clock.
-    // The busy workspace is removed on the second try. The SDK transcript
-    // directory is removed once after that.
+    // The busy workspace is removed on the second try.
     await expect(pending).rejects.toThrow(/circular/i);
     expect(fs.rm).toHaveBeenNthCalledWith(
       1,
@@ -223,13 +214,9 @@ describe("completion initialization cleanup", () => {
       "/virtual/private-workspace",
       removalOptions,
     );
-    expect(fs.rm).toHaveBeenNthCalledWith(
-      3,
-      "/virtual/cursor-data/projects/virtual-private-workspace",
-      removalOptions,
-    );
+    expect(fs.rm).toHaveBeenCalledTimes(2);
     expect(createAgent).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(6);
+    expect(vi.getTimerCount()).toBe(3);
   });
 
   it("removes a workspace the SDK store recreates after rm returns", async () => {
@@ -263,12 +250,8 @@ describe("completion initialization cleanup", () => {
       "/virtual/private-workspace",
       removalOptions,
     );
-    expect(fs.rm).toHaveBeenNthCalledWith(
-      3,
-      "/virtual/cursor-data/projects/virtual-private-workspace",
-      removalOptions,
-    );
+    expect(fs.rm).toHaveBeenCalledTimes(2);
     expect(createAgent).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(6);
+    expect(vi.getTimerCount()).toBe(3);
   });
 });
