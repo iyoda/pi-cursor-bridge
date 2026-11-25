@@ -298,16 +298,16 @@ function isCatalogEntry(value: unknown): value is CatalogEntry {
   );
 }
 
-function isPiModel(
+function isStoredPiModel(
   value: unknown,
-): value is Extract<Catalog["models"][number], { reasoning: boolean }> {
+): value is Omit<
+  Extract<Catalog["models"][number], { reasoning: boolean }>,
+  "api" | "provider" | "baseUrl"
+> {
   if (!value || typeof value !== "object") return false;
   const model = value as {
     id?: unknown;
     name?: unknown;
-    api?: unknown;
-    provider?: unknown;
-    baseUrl?: unknown;
     type?: unknown;
     reasoning?: unknown;
     input?: unknown;
@@ -355,10 +355,16 @@ export function catalogFromStored(stored: unknown): Catalog | undefined {
     if (model && typeof model === "object" && model.id === "auto") {
       autoListed.add(catalog);
     }
-    if (!isPiModel(model)) continue;
+    if (!isStoredPiModel(model)) continue;
     const entry = selections[model.id];
     if (!isCatalogEntry(entry)) continue;
-    catalog.models.push(model);
+    // The legacy ProviderConfig stored rows without native model metadata.
+    catalog.models.push({
+      ...model,
+      api: CURSOR_SDK_API,
+      provider: CURSOR_SDK_PROVIDER,
+      baseUrl: CURSOR_SDK_BASE_URL,
+    });
     catalog.entries.set(model.id, entry);
   }
   if (!catalog.models.length) return undefined;

@@ -545,29 +545,36 @@ describe("SDK catalog", () => {
     },
   );
 
-  it("restores saved selections and ignores a damaged row", () => {
-    const catalog = buildCatalog([
-      {
-        id: "gpt-5.5",
-        displayName: "GPT-5.5",
-        variants: [
-          variant({ context: "272k", reasoning: "high" }, { isDefault: true }),
-        ],
-      },
-    ]);
-    const stored = catalogFromStored({
-      models: [...catalog.models, { id: "damaged", name: "Damaged" }],
-      cursorSdkSelections: serializeSelections(catalog),
-    });
-    expect(stored?.models.map((entry) => entry.id)).toEqual([
-      "gpt-5.5",
-      "auto",
-    ]);
-    expect(resolveSelection(stored!, "gpt-5.5").params).toEqual([
-      { id: "context", value: "272k" },
-      { id: "reasoning", value: "high" },
-    ]);
-    expect(catalogFromStored({ models: [] })).toBeUndefined();
-    expect(catalogFromStored(null)).toBeUndefined();
-  });
+  it.each(["native", "legacy"])(
+    "restores %s model rows and their saved selections",
+    (format) => {
+      const catalog = buildCatalog([
+        {
+          id: "gpt-5.5",
+          displayName: "GPT-5.5",
+          variants: [
+            variant(
+              { context: "272k", reasoning: "high" },
+              { isDefault: true },
+            ),
+          ],
+        },
+      ]);
+      const models =
+        format === "legacy"
+          ? catalog.models.map(({ api, provider, baseUrl, ...row }) => row)
+          : catalog.models;
+      const stored = catalogFromStored({
+        models: [...models, { id: "damaged", name: "Damaged" }],
+        cursorSdkSelections: serializeSelections(catalog),
+      });
+      expect(stored?.models).toEqual(ensureAuto(catalog).models);
+      expect(resolveSelection(stored!, "gpt-5.5").params).toEqual([
+        { id: "context", value: "272k" },
+        { id: "reasoning", value: "high" },
+      ]);
+      expect(catalogFromStored({ models: [] })).toBeUndefined();
+      expect(catalogFromStored(null)).toBeUndefined();
+    },
+  );
 });
