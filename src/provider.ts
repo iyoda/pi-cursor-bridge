@@ -500,6 +500,14 @@ export function createCursorSdkProvider(deps: ProviderDependencies) {
             reasoning: usage.reasoningTokens,
           };
         }
+        if (
+          result.calls.length === 0 &&
+          !output.content.some(
+            (part) => part.type === "text" && part.text.trim(),
+          )
+        ) {
+          throw new Error("Cursor finished without an answer or tool call.");
+        }
         for (const call of result.calls) {
           const contentIndex = output.content.length;
           const toolCall = {

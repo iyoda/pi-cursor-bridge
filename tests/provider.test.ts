@@ -1011,6 +1011,39 @@ describe("Pi provider stream", () => {
     expect(prompt).not.toContain("Continue the Pi transcript");
   });
 
+  it.each([undefined, "", " \t\n"])(
+    "rejects a completion without an answer or tool call (%j)",
+    async (text) => {
+      const deps = dependencies();
+      vi.mocked(deps.complete).mockResolvedValue({ calls: [], text });
+      const events = await collect(stream(deps));
+      const terminal = events.at(-1);
+      expect(terminal?.type).toBe("error");
+      if (terminal?.type !== "error") return;
+      expect(terminal.error.errorMessage).toBe(
+        "Cursor finished without an answer or tool call.",
+      );
+      expect(isRetryableAssistantError(terminal.error)).toBe(false);
+      expect(events.some((event) => event.type === "done")).toBe(false);
+    },
+  );
+
+  it("accepts answer text delivered only through deltas", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.complete).mockImplementation(async (request) => {
+      await request.onDelta?.({
+        update: { type: "text-delta", text: "hello" },
+      });
+      return { calls: [] };
+    });
+    const events = await collect(stream(deps));
+    expect(events.at(-1)).toMatchObject({
+      type: "done",
+      reason: "stop",
+      message: { content: [{ type: "text", text: "hello" }] },
+    });
+  });
+
   it("streams deltas once and maps SDK usage", async () => {
     const deps = dependencies();
     vi.mocked(deps.complete).mockImplementation(async (request) => {

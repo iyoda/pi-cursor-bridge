@@ -38,6 +38,7 @@ function providerConfig(): ProviderConfig {
   const registerProvider = vi.fn<ExtensionAPI["registerProvider"]>();
   extension({
     registerProvider,
+    on: vi.fn(),
     registerCommand: vi.fn(),
   } as unknown as ExtensionAPI);
   const provider = registerProvider.mock.calls[0]?.[1] as

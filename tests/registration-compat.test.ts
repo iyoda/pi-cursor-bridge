@@ -65,6 +65,7 @@ async function withRuntime(
           runtime.registerProvider(provider, config!);
         else runtime.registerNativeProvider(provider);
       },
+      on() {},
       registerCommand() {},
     } as unknown as ExtensionAPI);
     await run(runtime, credentials);
