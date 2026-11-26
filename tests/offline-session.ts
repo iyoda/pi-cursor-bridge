@@ -37,9 +37,6 @@ export async function withOfflinePiSession(
         retry?: NonNullable<
           Parameters<typeof SettingsManager.inMemory>[0]
         >["retry"];
-        extensionFactories?: NonNullable<
-          ConstructorParameters<typeof DefaultResourceLoader>[0]
-        >["extensionFactories"];
       },
     ) => Promise<StartedSession>;
   }) => Promise<void>,
@@ -73,7 +70,6 @@ export async function withOfflinePiSession(
           agentDir: directory,
           settingsManager: settings,
           noExtensions: true,
-          extensionFactories: options.extensionFactories,
           noSkills: true,
           noPromptTemplates: true,
           noThemes: true,

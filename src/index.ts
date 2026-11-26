@@ -7,7 +7,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { runCompletion } from "./bridge.js";
 import { CatalogRefreshError, CURSOR_SDK_PROVIDER } from "./catalog.js";
-import { registerCompactionContinuation } from "./compaction-continuation.js";
 import { createCursorSdkRegistration } from "./provider.js";
 
 function registerContextEstimate(pi: ExtensionAPI): void {
@@ -43,7 +42,6 @@ function registerContextEstimate(pi: ExtensionAPI): void {
 
 export default function cursorSdkExtension(pi: ExtensionAPI): void {
   registerContextEstimate(pi);
-  registerCompactionContinuation(pi);
   const measurePayload = process.env.PI_CURSOR_SDK_PAYLOAD_METRICS === "1";
   let omittedModels = 0;
   let omittedDetails: readonly string[] = [];
