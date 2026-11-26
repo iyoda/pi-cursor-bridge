@@ -32,3 +32,13 @@ jobs:
       - run: npm run pack:check
       - run: npm run install:check -- ./.pack/iyoda-pi-cursor-bridge-*.tgz 1.5.2
       - run: npm run install:check -- ./.pack/iyoda-pi-cursor-bridge-*.tgz 1.6.0
+
+  # Single stable check name for branch protection; matrix job names change
+  # whenever the Node versions do.
+  ci-ok:
+    if: always()
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all matrix jobs to succeed
+        run: test "${{ needs.check.result }}" = "success"

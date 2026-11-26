@@ -905,7 +905,10 @@ describe("official SDK completion", () => {
       const stalled = new Promise<void>((resolve) => {
         releaseStall = resolve;
       });
-      let ready = false;
+      let markReady!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        markReady = resolve;
+      });
       h.send.mockImplementation(async (_message, opts) => {
         await opts?.onDelta?.({
           update: { type: "text-delta", text: "Before " },
@@ -919,7 +922,7 @@ describe("official SDK completion", () => {
         void opts?.onDelta?.({
           update: { type: "text-delta", text: "stalled" },
         });
-        ready = true;
+        markReady();
         return h.run;
       });
       vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -950,10 +953,9 @@ describe("official SDK completion", () => {
           settled = true;
         },
       );
-      for (let i = 0; i < 100 && !ready; i++) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect(ready).toBe(true);
+      // Workspace setup does real fs I/O, so a fixed number of event-loop
+      // turns can miss send() on a loaded runner. Wait for send() itself.
+      await ready;
       for (let i = 0; i < 4; i++) {
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
@@ -1019,7 +1021,10 @@ describe("official SDK completion", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const h = harness();
-      let ready = false;
+      let markReady!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        markReady = resolve;
+      });
       h.send.mockImplementation(async (_message, opts) => {
         void Promise.resolve(
           h.options.local!.customTools!.pi_tool_0!.execute(
@@ -1030,7 +1035,7 @@ describe("official SDK completion", () => {
         await opts?.onDelta?.({
           update: { type: "text-delta", text: "late text" },
         });
-        ready = true;
+        markReady();
         return h.run;
       });
       vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -1057,10 +1062,9 @@ describe("official SDK completion", () => {
           settled = true;
         },
       );
-      for (let i = 0; i < 100 && !ready; i++) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect(ready).toBe(true);
+      // Workspace setup does real fs I/O, so a fixed number of event-loop
+      // turns can miss send() on a loaded runner. Wait for send() itself.
+      await ready;
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1_000);
@@ -1169,7 +1173,10 @@ describe("official SDK completion", () => {
       let onDelta: NonNullable<
         Parameters<BridgeAgent["send"]>[1]
       >["onDelta"] = async () => {};
-      let ready = false;
+      let markReady!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        markReady = resolve;
+      });
       h.send.mockImplementation(async (_message, opts) => {
         onDelta = opts?.onDelta ?? onDelta;
         void Promise.resolve(
@@ -1178,7 +1185,7 @@ describe("official SDK completion", () => {
             { toolCallId: "sdk-call" },
           ),
         ).catch(() => {});
-        ready = true;
+        markReady();
         return h.run;
       });
       vi.mocked(h.run.wait).mockImplementation(() => new Promise(() => {}));
@@ -1205,10 +1212,9 @@ describe("official SDK completion", () => {
           settled = true;
         },
       );
-      for (let i = 0; i < 100 && !ready; i++) {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-      expect(ready).toBe(true);
+      // Workspace setup does real fs I/O, so a fixed number of event-loop
+      // turns can miss send() on a loaded runner. Wait for send() itself.
+      await ready;
       await vi.advanceTimersByTimeAsync(900);
       expect(settled).toBe(false);
       await onDelta({ update: { type: "text-delta", text: "late" } });
