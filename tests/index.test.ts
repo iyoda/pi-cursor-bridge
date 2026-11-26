@@ -40,9 +40,10 @@ function providerConfig(): ProviderConfig {
     registerProvider,
     registerCommand: vi.fn(),
   } as unknown as ExtensionAPI);
-  const config = registerProvider.mock.calls[0]?.[1];
-  if (!config) throw new Error("cursor-sdk provider was not registered");
-  return config;
+  const provider = registerProvider.mock.calls[0]?.[1] as
+    ProviderConfig | undefined;
+  if (!provider) throw new Error("cursor-sdk provider was not registered");
+  return provider;
 }
 
 describe("cursor-sdk extension wiring", () => {
@@ -77,7 +78,10 @@ describe("cursor-sdk extension wiring", () => {
       config.oauth!.login({
         signal,
         onAuth,
-      } as unknown as Parameters<NonNullable<typeof config.oauth>["login"]>[0]),
+        onDeviceCode: vi.fn(),
+        onPrompt: vi.fn(async () => ""),
+        onSelect: vi.fn(async () => undefined),
+      }),
     ).resolves.toMatchObject({ access: "wired-key", expires: 123 });
     expect(login).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -93,7 +97,7 @@ describe("cursor-sdk extension wiring", () => {
     sent.onLoginUrl(url);
     expect(onAuth).toHaveBeenCalledWith(expect.objectContaining({ url }));
 
-    const models = await config.refreshModels!({
+    const refreshed = await config.refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
       signal,
@@ -103,7 +107,7 @@ describe("cursor-sdk extension wiring", () => {
       },
     });
     expect(list).toHaveBeenCalledWith({ apiKey: "test-key" });
-    expect(models.map((item) => item.id)).toEqual(["from-index", "auto"]);
+    expect(refreshed.map((item) => item.id)).toEqual(["from-index", "auto"]);
   });
 
   it.each(["off", "other", "on", "write-error"])(

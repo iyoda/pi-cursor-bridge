@@ -1,6 +1,11 @@
 import type { ModelListItem, ModelSelection, ModelVariant } from "@cursor/sdk";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
+import type { Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
+
+export const CURSOR_SDK_API = "cursor-sdk-api" as const;
+export const CURSOR_SDK_PROVIDER = "cursor-sdk" as const;
+export const CURSOR_SDK_BASE_URL = "https://api2.cursor.sh";
+
+type CursorSdkModel = Model<typeof CURSOR_SDK_API>;
 
 export class CatalogRefreshError extends Error {
   override name = "CatalogRefreshError";
@@ -12,7 +17,7 @@ export interface CatalogEntry {
 }
 
 export interface Catalog {
-  models: NonNullable<ProviderConfig["models"]>;
+  models: CursorSdkModel[];
   entries: Map<string, CatalogEntry>;
   skipped: string[];
 }
@@ -168,6 +173,9 @@ function buildItem(
     models.push({
       id,
       name,
+      api: CURSOR_SDK_API,
+      provider: CURSOR_SDK_PROVIDER,
+      baseUrl: CURSOR_SDK_BASE_URL,
       reasoning,
       ...(reasoning ? { thinkingLevelMap } : {}),
       input: ["text"],
@@ -290,9 +298,12 @@ function isCatalogEntry(value: unknown): value is CatalogEntry {
   );
 }
 
-function isPiModel(
+function isStoredPiModel(
   value: unknown,
-): value is Extract<Catalog["models"][number], { reasoning: boolean }> {
+): value is Omit<
+  Extract<Catalog["models"][number], { reasoning: boolean }>,
+  "api" | "provider" | "baseUrl"
+> {
   if (!value || typeof value !== "object") return false;
   const model = value as {
     id?: unknown;
@@ -344,10 +355,16 @@ export function catalogFromStored(stored: unknown): Catalog | undefined {
     if (model && typeof model === "object" && model.id === "auto") {
       autoListed.add(catalog);
     }
-    if (!isPiModel(model)) continue;
+    if (!isStoredPiModel(model)) continue;
     const entry = selections[model.id];
     if (!isCatalogEntry(entry)) continue;
-    catalog.models.push(model);
+    // The legacy ProviderConfig stored rows without native model metadata.
+    catalog.models.push({
+      ...model,
+      api: CURSOR_SDK_API,
+      provider: CURSOR_SDK_PROVIDER,
+      baseUrl: CURSOR_SDK_BASE_URL,
+    });
     catalog.entries.set(model.id, entry);
   }
   if (!catalog.models.length) return undefined;

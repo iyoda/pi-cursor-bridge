@@ -68,7 +68,16 @@ describe("Pi extension registration", () => {
       registerProvider,
       registerCommand,
     } as unknown as ExtensionAPI);
-    const config = registerProvider.mock.calls[0]?.[1];
+    const config = registerProvider.mock.calls[0]?.[1] as
+      | {
+          refreshModels?: (ctx: {
+            credential?: unknown;
+            allowNetwork: boolean;
+            signal: AbortSignal;
+            publish: (publication: { update?: () => void }) => Promise<boolean>;
+          }) => Promise<void>;
+        }
+      | undefined;
     if (!config?.refreshModels) throw new Error("provider was not registered");
     const handler = registerCommand.mock.calls[0]![1].handler;
     const notify = vi.fn();
@@ -133,7 +142,7 @@ describe("Pi extension registration", () => {
     expect(registerProvider).toHaveBeenCalledTimes(1);
     expect(registerProvider).toHaveBeenCalledWith(
       "cursor-sdk",
-      expect.objectContaining({ api: "cursor-sdk-api" }),
+      expect.objectContaining({ name: "Cursor SDK" }),
     );
     expect(registerCommand).toHaveBeenCalledWith(
       "cursor-sdk-refresh",

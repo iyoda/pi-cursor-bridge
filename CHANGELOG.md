@@ -2,6 +2,12 @@
 
 User-visible changes are recorded here. Headings match the `version` field in `package.json`.
 
+## [0.1.1]
+
+- Keep manual API-key login, `CURSOR_API_KEY` precedence over `models.json`, and the SDK-owned model catalog when registering `cursor-sdk` with Pi.
+- Restore older cached rows and SDK selections without deleting the model cache.
+- Use `@cursor/sdk` `1.4.2` as the runtime dependency.
+
 ## [0.1.0]
 
 This is an early development release.

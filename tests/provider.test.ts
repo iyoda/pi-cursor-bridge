@@ -8,7 +8,7 @@ import {
   type Model,
 } from "@earendil-works/pi-ai";
 import {
-  createProviderConfig,
+  createCursorSdkProvider,
   type ProviderDependencies,
 } from "../src/provider.js";
 
@@ -42,19 +42,20 @@ async function collect(stream: AsyncIterable<AssistantMessageEvent>) {
 }
 
 type StreamFn = NonNullable<
-  ReturnType<typeof createProviderConfig>["streamSimple"]
+  ReturnType<typeof createCursorSdkProvider>["streamSimple"]
 >;
 type StreamOptions = NonNullable<Parameters<StreamFn>[2]>;
 
 function stream(
-  source: ProviderDependencies | ReturnType<typeof createProviderConfig>,
+  source: ProviderDependencies | ReturnType<typeof createCursorSdkProvider>,
   options: StreamOptions = {},
   target: {
     model?: Parameters<StreamFn>[0];
     context?: Parameters<StreamFn>[1];
   } = {},
 ) {
-  const config = "complete" in source ? createProviderConfig(source) : source;
+  const config =
+    "complete" in source ? createCursorSdkProvider(source) : source;
   return config.streamSimple!(
     target.model ?? model,
     target.context ?? normalizeContext({ messages: [] }),
@@ -134,7 +135,7 @@ describe("Pi provider stream", () => {
         parameters: [{ id: "effort", values: [{ value: "medium" }] }],
       },
     ]);
-    const refresh = createProviderConfig(deps).refreshModels!({
+    const refresh = createCursorSdkProvider(deps).refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
       signal: new AbortController().signal,
@@ -301,7 +302,7 @@ describe("Pi provider stream", () => {
     "keeps the serving selection when catalog refresh is %s",
     async (failure) => {
       const deps = dependencies();
-      const config = createProviderConfig(deps);
+      const config = createCursorSdkProvider(deps);
       const refresh = {
         credential: { type: "api_key" as const, key: "test-key" },
         allowNetwork: true,
@@ -333,7 +334,8 @@ describe("Pi provider stream", () => {
         publish: async () => false,
       });
       if (failure === "declined") {
-        expect(await attempt).toEqual([
+        await attempt;
+        expect(config.getModels()).toEqual([
           expect.objectContaining({ id: "known" }),
           expect.objectContaining({ id: "auto" }),
         ]);
@@ -388,8 +390,8 @@ describe("Pi provider stream", () => {
         ],
       },
     ]);
-    const config = createProviderConfig(deps);
-    const models = await config.refreshModels!({
+    const config = createCursorSdkProvider(deps);
+    await config.refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
       signal: new AbortController().signal,
@@ -398,7 +400,9 @@ describe("Pi provider stream", () => {
         return true;
       },
     });
-    const selected = models.find((item) => item.id === "test-model-1m-fast");
+    const selected = config
+      .getModels()
+      .find((item) => item.id === "test-model-1m-fast");
     if (
       !selected ||
       (selected.type !== undefined && selected.type !== "chat")
@@ -673,24 +677,26 @@ describe("Pi provider stream", () => {
       options.onLoginUrl?.("https://cursor.com/test-login");
       return { apiKey: "test-key", apiKeyExpiresAtMs: 2000000000000 };
     });
-    const onAuth = vi.fn();
+    const notify = vi.fn();
     const controller = new AbortController();
-    const config = createProviderConfig(deps);
-    expect(config.oauth).toBeDefined();
-    const credentials = await config.oauth!.login({
-      onAuth,
-      onDeviceCode: vi.fn(),
-      onPrompt: vi.fn(),
-      onSelect: vi.fn(),
+    const config = createCursorSdkProvider(deps);
+    expect(config.auth.oauth).toBeDefined();
+    const credentials = await config.auth.oauth!.login({
+      notify,
+      prompt: vi.fn(async () => ""),
       signal: controller.signal,
     });
     expect(credentials).toMatchObject({
+      type: "oauth",
       access: "test-key",
       refresh: "",
       expires: 2000000000000,
     });
-    expect(onAuth).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "https://cursor.com/test-login" }),
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "auth_url",
+        url: "https://cursor.com/test-login",
+      }),
     );
     expect(deps.login).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -699,9 +705,10 @@ describe("Pi provider stream", () => {
         signal: controller.signal,
       }),
     );
-    expect(config.oauth!.getApiKey(credentials)).toBe("test-key");
+    const auth = await config.auth.oauth!.toAuth(credentials);
+    expect(auth.apiKey).toBe("test-key");
     await expect(
-      config.oauth!.refreshToken(credentials, controller.signal),
+      config.auth.oauth!.refresh(credentials, controller.signal),
     ).rejects.toThrow(/login cursor-sdk/);
   });
 
@@ -720,9 +727,9 @@ describe("Pi provider stream", () => {
         ],
       },
     ]);
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     const signal = new AbortController().signal;
-    const models = await config.refreshModels!({
+    await config.refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
       signal,
@@ -731,7 +738,7 @@ describe("Pi provider stream", () => {
         return true;
       }),
     });
-    expect(models).toEqual([
+    expect(config.getModels()).toEqual([
       expect.objectContaining({
         id: "grok-test",
         name: "Grok Test",
@@ -767,7 +774,7 @@ describe("Pi provider stream", () => {
 
   it("keeps auto when a fetch omits it and does not duplicate a fetched auto row", async () => {
     const deps = dependencies();
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     const signal = new AbortController().signal;
     const refresh = {
       credential: { type: "api_key" as const, key: "test-key" },
@@ -781,8 +788,11 @@ describe("Pi provider stream", () => {
     vi.mocked(deps.listModels).mockResolvedValue([
       { id: "grok-test", displayName: "Grok Test" },
     ]);
-    const omitted = await config.refreshModels!(refresh);
-    expect(omitted.map((item) => item.id)).toEqual(["grok-test", "auto"]);
+    await config.refreshModels!(refresh);
+    expect(config.getModels().map((item) => item.id)).toEqual([
+      "grok-test",
+      "auto",
+    ]);
     const events = await collect(stream(config));
     expect(events.at(-1)?.type).toBe("done");
     expect(vi.mocked(deps.complete).mock.calls[0]![0].model).toEqual({
@@ -792,9 +802,12 @@ describe("Pi provider stream", () => {
     vi.mocked(deps.listModels).mockResolvedValue([
       { id: "auto", displayName: "From SDK" },
     ]);
-    const listed = await config.refreshModels!(refresh);
-    expect(listed.map((item) => item.id)).toEqual(["auto"]);
-    expect(listed[0]).toMatchObject({ name: "From SDK", reasoning: false });
+    await config.refreshModels!(refresh);
+    expect(config.getModels().map((item) => item.id)).toEqual(["auto"]);
+    expect(config.getModels()[0]).toMatchObject({
+      name: "From SDK",
+      reasoning: false,
+    });
   });
 
   it("does not restore a rejected auto after publishing and restarting", async () => {
@@ -805,27 +818,28 @@ describe("Pi provider stream", () => {
       { id: "auto", displayName: "Second" },
     ]);
     const signal = new AbortController().signal;
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     const publish = vi.fn<
       Parameters<NonNullable<typeof config.refreshModels>>[0]["publish"]
     >(async ({ update }) => {
       update?.();
       return true;
     });
-    const models = await config.refreshModels!({
+    await config.refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
       signal,
       publish,
     });
-    expect(models.map(({ id }) => id)).toEqual(["good"]);
-    const restored = await createProviderConfig(deps).refreshModels!({
+    expect(config.getModels().map(({ id }) => id)).toEqual(["good"]);
+    const restored = createCursorSdkProvider(deps);
+    await restored.refreshModels({
       allowNetwork: false,
       stored: publish.mock.calls[0]![0].persist ?? undefined,
       signal,
       publish,
     });
-    expect(restored.map(({ id }) => id)).toEqual(["good"]);
+    expect(restored.getModels().map(({ id }) => id)).toEqual(["good"]);
   });
 
   it("isolates a model listing failure from SDK exception details", async () => {
@@ -834,7 +848,7 @@ describe("Pi provider stream", () => {
       new Error("test-key", { cause: { key: "test-key" } }),
     );
     const publish = vi.fn(async () => true);
-    const pending = createProviderConfig(deps).refreshModels!({
+    const pending = createCursorSdkProvider(deps).refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
       signal: new AbortController().signal,
@@ -859,27 +873,27 @@ describe("Pi provider stream", () => {
         parameters: [{ id: "effort", values: [{ value: "high" }] }],
       },
     ]);
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     const refresh = {
       credential: { type: "api_key" as const, key: "test-key" },
       allowNetwork: true,
       signal: new AbortController().signal,
     };
-    const withheld = await config.refreshModels!({
+    await config.refreshModels!({
       ...refresh,
       publish: async () => false,
     });
-    expect(withheld.map((item) => item.id)).toEqual(["auto"]);
+    expect(config.getModels().map((item) => item.id)).toEqual(["auto"]);
     expect(deps.noteOmitted).not.toHaveBeenCalled();
 
-    const models = await config.refreshModels!({
+    await config.refreshModels!({
       ...refresh,
       publish: async ({ update }) => {
         update?.();
         return true;
       },
     });
-    expect(models.map((item) => item.id)).toEqual(["good", "auto"]);
+    expect(config.getModels().map((item) => item.id)).toEqual(["good", "auto"]);
     expect(deps.noteOmitted).toHaveBeenCalledTimes(1);
     expect(deps.noteOmitted).toHaveBeenCalledWith(1, [
       "Parameterized model bad has no variants",
@@ -908,7 +922,7 @@ describe("Pi provider stream", () => {
         ],
       },
     ]);
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     await config.refreshModels!({
       credential: { type: "api_key", key: "test-key" },
       allowNetwork: true,
@@ -931,7 +945,7 @@ describe("Pi provider stream", () => {
 
   it("resolves a saved model before the next catalog fetch", async () => {
     const deps = dependencies();
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     const saved = {
       id: "saved-model",
       name: "Saved",
@@ -941,7 +955,7 @@ describe("Pi provider stream", () => {
       contextWindow: 64000,
       maxTokens: 8192,
     };
-    const models = await config.refreshModels!({
+    await config.refreshModels!({
       allowNetwork: false,
       signal: new AbortController().signal,
       stored: {
@@ -961,7 +975,10 @@ describe("Pi provider stream", () => {
         return true;
       },
     });
-    expect(models.map((item) => item.id)).toEqual(["saved-model", "auto"]);
+    expect(config.getModels().map((item) => item.id)).toEqual([
+      "saved-model",
+      "auto",
+    ]);
     expect(deps.listModels).not.toHaveBeenCalled();
     const events = await collect(
       stream(config, {}, { model: { ...model, id: "saved-model" } }),
@@ -1170,7 +1187,7 @@ describe("Pi provider stream", () => {
     vi.mocked(deps.complete).mockResolvedValue({
       calls: [{ id: "call-1", name: "read", arguments: { path: "a.ts" } }],
     });
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     const events = await collect(
       stream(
         config,
@@ -1280,7 +1297,7 @@ describe("Pi provider stream", () => {
   });
   it("emits Pi text events and exactly one terminal event", async () => {
     const deps = dependencies();
-    const config = createProviderConfig(deps);
+    const config = createCursorSdkProvider(deps);
     const events = await collect(
       stream(
         config,

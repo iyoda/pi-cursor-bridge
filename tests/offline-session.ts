@@ -13,7 +13,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
-  createProviderConfig,
+  createCursorSdkProvider,
   type ProviderDependencies,
 } from "../src/provider.js";
 
@@ -48,7 +48,7 @@ export async function withOfflinePiSession(
       modelsStore: new InMemoryModelsStore(),
       refreshOnCreate: false,
     });
-    runtime.registerProvider("cursor-sdk", createProviderConfig(deps));
+    runtime.registerNativeProvider(createCursorSdkProvider(deps));
     await run({
       directory,
       runtime,
