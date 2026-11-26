@@ -2,9 +2,10 @@
 
 User-visible changes are recorded here. Headings match the `version` field in `package.json`.
 
-## Unreleased
+## [0.1.2]
 
 - Report Cursor runs that finish without non-blank answer text or a tool call as non-retryable errors. Thinking still streams normally, and an empty compaction summary is not saved.
+- Show an approximate Pi context percentage after compaction until fresh usage is available.
 - Verify packed-package upgrades offline on Pi 1.5.2, 1.6.0, and 1.6.1, including saved model selection, Thinking clamped by the cached level map, and fallback from an empty or unreadable cache.
 - Document how to compare Cursor prompt payload savings with an offline replay benchmark, without sending inference requests.
 

@@ -1,6 +1,6 @@
 {
   "name": "@iyoda/pi-cursor-bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pi provider using the official Cursor SDK with Pi-owned tool execution",
   "type": "module",
   "license": "MIT",
