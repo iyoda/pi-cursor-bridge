@@ -5,6 +5,7 @@ import type {
 } from "@cursor/sdk";
 import {
   createAssistantMessageEventStream,
+  type Api,
   type ApiStreamOptions,
   type AssistantMessage,
   type AssistantMessageEventStream,
@@ -18,6 +19,7 @@ import {
   type SimpleStreamOptions,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
+import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
 import { buildPrompt } from "./prompt.js";
 import {
   abortAfter,
@@ -109,17 +111,63 @@ function failureCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
-/**
- * Build the native `Provider` for the Cursor SDK.
- *
- * Replaces the legacy `ProviderConfig` form. The provider owns its auth
- * (OAuth via the official browser login, or an ambient `CURSOR_API_KEY`),
- * its dynamic model catalog (restored from storage, refreshed over the
- * network), and its custom streaming implementation.
- */
-export function createCursorSdkProvider(
+const oauthName = "Cursor SDK (official browser login)";
+const expiredKeyMessage =
+  "Cursor SDK API key expired; run /login cursor-sdk again.";
+
+async function loginCursor(
   deps: ProviderDependencies,
-): Provider<typeof CURSOR_SDK_API> {
+  signal: AbortSignal | undefined,
+  onAuth: (info: { url: string; instructions: string }) => void,
+) {
+  const result = await deps.login({
+    store: null,
+    openBrowser: false,
+    signal,
+    apiKeyName: "pi-cursor-sdk",
+    onLoginUrl: (url) =>
+      onAuth({
+        url,
+        instructions: "Open this URL to create a Cursor SDK API key for Pi.",
+      }),
+  });
+  return {
+    access: result.apiKey,
+    refresh: "",
+    expires: result.apiKeyExpiresAtMs,
+  };
+}
+
+/** Register through Pi's compatibility overload until native registration can
+ * preserve the extension's catalog and API-key configuration precedence. */
+export function createCursorSdkRegistration(
+  deps: ProviderDependencies,
+): ProviderConfig {
+  const provider = createCursorSdkProvider(deps);
+  return {
+    name: provider.name,
+    api: CURSOR_SDK_API,
+    baseUrl: CURSOR_SDK_BASE_URL,
+    apiKey: "${CURSOR_API_KEY}",
+    models: [...provider.getModels()],
+    oauth: {
+      name: oauthName,
+      isSubscription: true,
+      login: ({ signal, onAuth }) => loginCursor(deps, signal, onAuth),
+      async refreshToken() {
+        throw new Error(expiredKeyMessage);
+      },
+      getApiKey: (credential) => credential.access,
+    },
+    async refreshModels(context) {
+      await provider.refreshModels(context);
+      return [...provider.getModels()];
+    },
+    streamSimple: provider.streamSimple,
+  };
+}
+
+export function createCursorSdkProvider(deps: ProviderDependencies) {
   let catalog: Catalog = buildCatalog([
     { id: "auto", displayName: "Cursor Auto (SDK fallback)" },
   ]);
@@ -127,36 +175,17 @@ export function createCursorSdkProvider(
   // --- Auth -----------------------------------------------------------------
 
   const oauth: OAuthAuth = {
-    name: "Cursor SDK (official browser login)",
+    name: oauthName,
     isSubscription: true,
     async login(interaction) {
-      const signal = interaction.signal;
-      const result = await deps.login({
-        store: null,
-        openBrowser: false,
-        signal,
-        apiKeyName: "pi-cursor-sdk",
-        onLoginUrl: (url) =>
-          interaction.notify({
-            type: "auth_url",
-            url,
-            instructions:
-              "Open this URL to create a Cursor SDK API key for Pi.",
-          }),
-      });
-      return {
-        type: "oauth",
-        access: result.apiKey,
-        refresh: "",
-        expires: result.apiKeyExpiresAtMs ?? 0,
-      };
+      const credential = await loginCursor(deps, interaction.signal, (info) =>
+        interaction.notify({ type: "auth_url", ...info }),
+      );
+      return { type: "oauth", ...credential };
     },
     async refresh() {
-      // The Cursor SDK API key has no refresh token. When it expires the
-      // user must run /login cursor-sdk again.
-      throw new Error(
-        "Cursor SDK API key expired; run /login cursor-sdk again.",
-      );
+      // SDK keys cannot be refreshed; the user must log in again.
+      throw new Error(expiredKeyMessage);
     },
     async toAuth(credential) {
       return { apiKey: credential.access };
@@ -256,7 +285,7 @@ export function createCursorSdkProvider(
   // --- Streaming -------------------------------------------------------------
 
   function streamSimple(
-    model: Model<typeof CURSOR_SDK_API>,
+    model: Model<Api>,
     context: TranscriptContext,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream {
@@ -527,10 +556,10 @@ export function createCursorSdkProvider(
 
   // `stream` is required by the `Provider` contract. The Cursor SDK only
   // supports the simple (non-typed) stream path, so delegate to `streamSimple`.
-  function stream(
-    model: Model<typeof CURSOR_SDK_API>,
+  function stream<T extends Api>(
+    model: Model<T>,
     context: TranscriptContext,
-    options?: ApiStreamOptions<typeof CURSOR_SDK_API>,
+    options?: ApiStreamOptions<T>,
   ): AssistantMessageEventStream {
     return streamSimple(
       model,
@@ -548,5 +577,5 @@ export function createCursorSdkProvider(
     refreshModels,
     stream,
     streamSimple,
-  };
+  } satisfies Provider;
 }

@@ -68,7 +68,7 @@ describe("Pi extension registration", () => {
       registerProvider,
       registerCommand,
     } as unknown as ExtensionAPI);
-    const config = registerProvider.mock.calls[0]?.[0] as
+    const config = registerProvider.mock.calls[0]?.[1] as
       | {
           refreshModels?: (ctx: {
             credential?: unknown;
@@ -141,7 +141,8 @@ describe("Pi extension registration", () => {
     extension({ registerProvider, registerCommand } as unknown as ExtensionAPI);
     expect(registerProvider).toHaveBeenCalledTimes(1);
     expect(registerProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "cursor-sdk" }),
+      "cursor-sdk",
+      expect.objectContaining({ name: "Cursor SDK" }),
     );
     expect(registerCommand).toHaveBeenCalledWith(
       "cursor-sdk-refresh",

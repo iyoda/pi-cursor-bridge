@@ -6,6 +6,8 @@ User-visible changes are recorded here. Headings match the `version` field in `p
 
 This is an early development release.
 
+- Preserve compatibility when registering `cursor-sdk` with Pi, including manual API-key login, `CURSOR_API_KEY` precedence over `models.json`, and the SDK-owned model catalog. Restore older cached rows and SDK selections without deleting the model cache.
+
 - Rename the extension to `pi-cursor-bridge` (`@iyoda/pi-cursor-bridge` on npm). Keep the Pi provider ID `cursor-sdk` and existing commands and settings unchanged.
 
 - Add optional Cursor payload savings for historical tool results and repeated tool definitions, plus an example of Pi retry and compaction settings. The default prompt is unchanged.

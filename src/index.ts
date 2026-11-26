@@ -2,15 +2,16 @@ import { writeSync } from "node:fs";
 import { Agent, Cursor } from "@cursor/sdk";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { runCompletion } from "./bridge.js";
-import { CatalogRefreshError } from "./catalog.js";
-import { createCursorSdkProvider } from "./provider.js";
+import { CatalogRefreshError, CURSOR_SDK_PROVIDER } from "./catalog.js";
+import { createCursorSdkRegistration } from "./provider.js";
 
 export default function cursorSdkExtension(pi: ExtensionAPI): void {
   const measurePayload = process.env.PI_CURSOR_SDK_PAYLOAD_METRICS === "1";
   let omittedModels = 0;
   let omittedDetails: readonly string[] = [];
   pi.registerProvider(
-    createCursorSdkProvider({
+    CURSOR_SDK_PROVIDER,
+    createCursorSdkRegistration({
       measurePayload,
       savings: {
         trimToolResults: process.env.PI_CURSOR_SDK_TRIM_TOOL_RESULTS === "1",

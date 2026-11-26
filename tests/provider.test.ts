@@ -832,13 +832,14 @@ describe("Pi provider stream", () => {
       publish,
     });
     expect(config.getModels().map(({ id }) => id)).toEqual(["good"]);
-    await createCursorSdkProvider(deps).refreshModels!({
+    const restored = createCursorSdkProvider(deps);
+    await restored.refreshModels({
       allowNetwork: false,
       stored: publish.mock.calls[0]![0].persist ?? undefined,
       signal,
       publish,
     });
-    expect(config.getModels().map(({ id }) => id)).toEqual(["good"]);
+    expect(restored.getModels().map(({ id }) => id)).toEqual(["good"]);
   });
 
   it("isolates a model listing failure from SDK exception details", async () => {
