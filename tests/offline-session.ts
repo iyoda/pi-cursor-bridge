@@ -30,7 +30,14 @@ export async function withOfflinePiSession(
     directory: string;
     runtime: ModelRuntime;
     start: (
-      options: Pick<CreateSessionInput, "model" | "thinkingLevel">,
+      options: Pick<CreateSessionInput, "model" | "thinkingLevel"> & {
+        compaction?: NonNullable<
+          Parameters<typeof SettingsManager.inMemory>[0]
+        >["compaction"];
+        retry?: NonNullable<
+          Parameters<typeof SettingsManager.inMemory>[0]
+        >["retry"];
+      },
     ) => Promise<StartedSession>;
   }) => Promise<void>,
 ): Promise<void> {
@@ -55,8 +62,8 @@ export async function withOfflinePiSession(
       async start(options) {
         if (dispose) throw new Error("Offline Pi session already started.");
         const settings = SettingsManager.inMemory({
-          compaction: { enabled: false },
-          retry: { enabled: false },
+          compaction: options.compaction ?? { enabled: false },
+          retry: options.retry ?? { enabled: false },
         });
         const loader = new DefaultResourceLoader({
           cwd: directory,

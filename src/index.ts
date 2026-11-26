@@ -1,11 +1,47 @@
 import { writeSync } from "node:fs";
 import { Agent, Cursor } from "@cursor/sdk";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  estimateTokens,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { runCompletion } from "./bridge.js";
 import { CatalogRefreshError, CURSOR_SDK_PROVIDER } from "./catalog.js";
 import { createCursorSdkRegistration } from "./provider.js";
 
+function registerContextEstimate(pi: ExtensionAPI): void {
+  const key = "cursor-sdk-context";
+  const update = (_event: unknown, ctx: ExtensionContext) => {
+    if (!ctx.hasUI) return;
+    const usage =
+      ctx.model?.provider === CURSOR_SDK_PROVIDER
+        ? ctx.getContextUsage()
+        : undefined;
+    if (usage?.percent !== null || usage.contextWindow <= 0) {
+      ctx.ui.setStatus(key, undefined);
+      return;
+    }
+    // Pi does not trust pre-compaction usage. Estimate only its current
+    // projected history, without changing provider usage or the native footer.
+    const { messages } = ctx.sessionManager.buildSessionProjection();
+    const tokens = messages.reduce(
+      (sum, message) => sum + estimateTokens(message),
+      0,
+    );
+    ctx.ui.setStatus(
+      key,
+      `Pi context ≈${((100 * tokens) / usage.contextWindow).toFixed(1)}%`,
+    );
+  };
+  pi.on("session_start", update);
+  pi.on("session_compact", update);
+  pi.on("session_tree", update);
+  pi.on("model_select", update);
+  pi.on("agent_end", update);
+}
+
 export default function cursorSdkExtension(pi: ExtensionAPI): void {
+  registerContextEstimate(pi);
   const measurePayload = process.env.PI_CURSOR_SDK_PAYLOAD_METRICS === "1";
   let omittedModels = 0;
   let omittedDetails: readonly string[] = [];

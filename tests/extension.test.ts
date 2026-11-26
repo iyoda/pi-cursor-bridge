@@ -24,6 +24,7 @@ describe("Pi extension registration", () => {
       const registerCommand = vi.fn<ExtensionAPI["registerCommand"]>();
       extension({
         registerProvider: vi.fn(),
+        on: vi.fn(),
         registerCommand,
       } as unknown as ExtensionAPI);
       const handler = registerCommand.mock.calls[0]![1].handler;
@@ -66,6 +67,7 @@ describe("Pi extension registration", () => {
     const registerCommand = vi.fn<ExtensionAPI["registerCommand"]>();
     extension({
       registerProvider,
+      on: vi.fn(),
       registerCommand,
     } as unknown as ExtensionAPI);
     const config = registerProvider.mock.calls[0]?.[1] as
@@ -138,7 +140,11 @@ describe("Pi extension registration", () => {
   it("uses a distinct provider id without changing existing cursor providers", () => {
     const registerProvider = vi.fn();
     const registerCommand = vi.fn();
-    extension({ registerProvider, registerCommand } as unknown as ExtensionAPI);
+    extension({
+      registerProvider,
+      registerCommand,
+      on: vi.fn(),
+    } as unknown as ExtensionAPI);
     expect(registerProvider).toHaveBeenCalledTimes(1);
     expect(registerProvider).toHaveBeenCalledWith(
       "cursor-sdk",

@@ -84,6 +84,14 @@ Running `/smoke-deny` again clears the block.
   and evaluate that it does not take priority over the user's request for analysis.
   A role expressed in JSON is not a real API role, so a pass still does not guarantee complete protection.
 
+## Comparing Cursor SDK versions
+
+Use separate builds pinned to the baseline and candidate SDK releases, with the same bridge source, Node, Pi, and `cursor-sdk/auto` selection. Create a fresh Pi settings directory, empty working directory, and private `CURSOR_DATA_DIR` for each build. Do not copy an existing auth file. Keep Pi retry and auto-compaction off, and use `--offline` to prevent startup model-catalog requests; inference is still live. Do not change the packaged SDK pin based on offline checks alone.
+
+For an explicitly approved comparison, allow up to four bridge sends per build: one tool-free response, one request interrupted after the first delta, and up to two sends for the fixed `smoke_echo` round trip. Do not retry failures. Keep tools disabled except for that round trip. Stop on unexpected tool activity, an ambiguous cancellation, or an exhausted send allowance. This allowance limits planned bridge sends, not SDK-internal traffic or charges.
+
+Record SDK import and package discovery separately from authenticated inference. For each live attempt, record completion status, time to first text (or unavailable), whether cancellation was acknowledged, tool execution count, and any SDK-reported usage. Mark missing usage rather than substituting estimates, and do not infer billed cost from these counters. Keep the existing pin if either build fails the comparison or if the comparison has not been run.
+
 ## Recording template
 
 | Item                                | Record  |

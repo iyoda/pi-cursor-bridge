@@ -60,6 +60,7 @@ async function request(
 ) {
   const complete = vi.fn(async (_request: CompletionRequest) => ({
     calls: [],
+    text: "Fixture answer.",
   }));
   const provider = createCursorSdkProvider({
     complete,

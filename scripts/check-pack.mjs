@@ -36,6 +36,7 @@ const expected = [
   "dist/index.js",
   "docs/live-validation-results.md",
   "docs/live-validation.md",
+  "docs/p2-offline-savings.md",
   "examples/smoke-tools.ts",
   "examples/cursor-budget-settings.json",
   "package.json",
